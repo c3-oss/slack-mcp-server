@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"github.com/gocarina/gocsv"
-	"github.com/korotovsky/slack-mcp-server/pkg/provider"
+	"github.com/c3-oss/slack-mcp-server/pkg/provider"
 	"github.com/slack-go/slack"
-	"github.com/korotovsky/slack-mcp-server/pkg/server/auth"
-	"github.com/korotovsky/slack-mcp-server/pkg/text"
+	"github.com/c3-oss/slack-mcp-server/pkg/server/auth"
+	"github.com/c3-oss/slack-mcp-server/pkg/text"
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
 )
