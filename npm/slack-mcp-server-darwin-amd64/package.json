@@ -1,11 +1,11 @@
 {
-  "name": "slack-mcp-server-darwin-amd64",
-  "version": "1.1.0",
-  "description": "Model Context Protocol (MCP) server for Slack Workspaces. This integration supports both Stdio and SSE transports, proxy settings and does not require any permissions or bots being created or approved by Workspace admins",
-  "os": [
-    "darwin"
-  ],
-  "cpu": [
-    "x64"
-  ]
+  "name": "@c3-oss/slack-mcp-server-darwin-amd64",
+  "version": "0.0.0-dev",
+  "description": "slack-mcp-server binary for macOS amd64 (Intel)",
+  "homepage": "https://github.com/c3-oss/slack-mcp-server",
+  "license": "MIT",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": ["bin/slack-mcp-server"],
+  "preferUnplugged": true
 }
