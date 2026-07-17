@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -99,6 +100,19 @@ type addMessageParams struct {
 	text        string
 	contentType string
 	blocks      []slack.Block
+	files       []uploadFile
+}
+
+type uploadFile struct {
+	path string
+	name string
+	root string
+}
+
+type renderedMessage struct {
+	options        []slack.MsgOption
+	blocks         []slack.Block
+	initialComment string
 }
 
 type addReactionParams struct {
@@ -219,60 +233,58 @@ func (ch *ConversationsHandler) ConversationsAddMessageHandler(ctx context.Conte
 		return nil, err
 	}
 
-	var options []slack.MsgOption
-	if params.threadTs != "" {
-		options = append(options, slack.MsgOptionTS(params.threadTs))
-	}
-
-	if params.blocks != nil {
-		// Raw blocks provided: use them directly. If text is also provided, it
-		// serves as the notification/fallback text.
-		options = append(options, slack.MsgOptionBlocks(params.blocks...))
-		if params.text != "" {
-			options = append(options, slack.MsgOptionText(params.text, false))
-		}
-	} else {
-		switch params.contentType {
-		case "text/plain":
-			options = append(options, slack.MsgOptionDisableMarkdown())
-			options = append(options, slack.MsgOptionText(params.text, false))
-		case "text/markdown":
-			blocks, err := slackGoUtil.ConvertMarkdownTextToBlocks(params.text)
-			if err != nil {
-				ch.logger.Warn("Markdown parsing error", zap.Error(err))
-				options = append(options, slack.MsgOptionDisableMarkdown())
-				options = append(options, slack.MsgOptionText(params.text, false))
-			} else {
-				options = append(options, slack.MsgOptionBlocks(blocks...))
-			}
-		default:
-			return nil, errors.New("content_type must be either 'text/plain' or 'text/markdown'")
-		}
-	}
-
-	unfurlOpt := os.Getenv("SLACK_MCP_ADD_MESSAGE_UNFURLING")
-	if text.IsUnfurlingEnabled(params.text, unfurlOpt, ch.logger) {
-		options = append(options, slack.MsgOptionEnableLinkUnfurl())
-	} else {
-		options = append(options, slack.MsgOptionDisableLinkUnfurl())
-		options = append(options, slack.MsgOptionDisableMediaUnfurl())
+	rendered, err := ch.renderMessage(params)
+	if err != nil {
+		return nil, err
 	}
 
 	ch.logger.Debug("Posting Slack message",
 		zap.String("channel", params.channel),
 		zap.String("thread_ts", params.threadTs),
 		zap.String("content_type", params.contentType),
+		zap.Int("file_count", len(params.files)),
 	)
-	respChannel, respTimestamp, err := ch.apiProvider.Slack().PostMessageContext(ctx, params.channel, options...)
+
+	if len(params.files) > 0 {
+		files, err := uploadFiles(ctx, ch.apiProvider.Slack(), params, rendered)
+		if err != nil {
+			ch.logger.Error("Slack file upload failed", zap.Error(err))
+			return nil, err
+		}
+
+		if isTruthyEnv("SLACK_MCP_ADD_MESSAGE_MARK") {
+			if err := ch.markUploadedMessage(ctx, params.channel, params.threadTs, files[0].ID); err != nil {
+				ch.logger.Error("Slack MarkConversationContext failed", zap.Error(err))
+				return nil, err
+			}
+		}
+
+		fileIDs := make([]string, 0, len(files))
+		for _, file := range files {
+			fileIDs = append(fileIDs, file.ID)
+		}
+		if params.threadTs != "" {
+			return mcp.NewToolResultText(fmt.Sprintf("Successfully posted message with %d file(s) to channel %s in thread %s (file_ids=%s)", len(files), params.channel, params.threadTs, strings.Join(fileIDs, ","))), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("Successfully posted message with %d file(s) to channel %s (file_ids=%s)", len(files), params.channel, strings.Join(fileIDs, ","))), nil
+	}
+
+	unfurlOpt := os.Getenv("SLACK_MCP_ADD_MESSAGE_UNFURLING")
+	if text.IsUnfurlingEnabled(params.text, unfurlOpt, ch.logger) {
+		rendered.options = append(rendered.options, slack.MsgOptionEnableLinkUnfurl())
+	} else {
+		rendered.options = append(rendered.options, slack.MsgOptionDisableLinkUnfurl())
+		rendered.options = append(rendered.options, slack.MsgOptionDisableMediaUnfurl())
+	}
+
+	respChannel, respTimestamp, err := ch.apiProvider.Slack().PostMessageContext(ctx, params.channel, rendered.options...)
 	if err != nil {
 		ch.logger.Error("Slack PostMessageContext failed", zap.Error(err))
 		return nil, err
 	}
 
-	toolConfig := os.Getenv("SLACK_MCP_ADD_MESSAGE_MARK")
-	if toolConfig == "1" || toolConfig == "true" || toolConfig == "yes" {
-		err := ch.apiProvider.Slack().MarkConversationContext(ctx, params.channel, respTimestamp)
-		if err != nil {
+	if isTruthyEnv("SLACK_MCP_ADD_MESSAGE_MARK") {
+		if err := ch.apiProvider.Slack().MarkConversationContext(ctx, params.channel, respTimestamp); err != nil {
 			ch.logger.Error("Slack MarkConversationContext failed", zap.Error(err))
 			return nil, err
 		}
@@ -282,6 +294,134 @@ func (ch *ConversationsHandler) ConversationsAddMessageHandler(ctx context.Conte
 		return mcp.NewToolResultText(fmt.Sprintf("Successfully posted message to channel %s in thread %s (ts=%s)", respChannel, params.threadTs, respTimestamp)), nil
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("Successfully posted message to channel %s (ts=%s)", respChannel, respTimestamp)), nil
+}
+
+func (ch *ConversationsHandler) renderMessage(params *addMessageParams) (*renderedMessage, error) {
+	rendered := &renderedMessage{}
+	if params.threadTs != "" {
+		rendered.options = append(rendered.options, slack.MsgOptionTS(params.threadTs))
+	}
+
+	if params.blocks != nil {
+		rendered.blocks = params.blocks
+		rendered.options = append(rendered.options, slack.MsgOptionBlocks(params.blocks...))
+		if params.text != "" {
+			rendered.options = append(rendered.options, slack.MsgOptionText(params.text, false))
+		}
+		return rendered, nil
+	}
+
+	if params.text == "" {
+		return rendered, nil
+	}
+
+	switch params.contentType {
+	case "text/plain":
+		rendered.initialComment = params.text
+		rendered.options = append(rendered.options, slack.MsgOptionDisableMarkdown(), slack.MsgOptionText(params.text, false))
+	case "text/markdown":
+		blocks, err := slackGoUtil.ConvertMarkdownTextToBlocks(params.text)
+		if err != nil {
+			ch.logger.Warn("Markdown parsing error", zap.Error(err))
+			rendered.initialComment = params.text
+			rendered.options = append(rendered.options, slack.MsgOptionDisableMarkdown(), slack.MsgOptionText(params.text, false))
+		} else {
+			rendered.blocks = blocks
+			rendered.options = append(rendered.options, slack.MsgOptionBlocks(blocks...))
+		}
+	default:
+		return nil, errors.New("content_type must be either 'text/plain' or 'text/markdown'")
+	}
+
+	return rendered, nil
+}
+
+func uploadFiles(ctx context.Context, client provider.SlackAPI, params *addMessageParams, rendered *renderedMessage) ([]slack.FileSummary, error) {
+	summaries := make([]slack.FileSummary, 0, len(params.files))
+
+	for _, upload := range params.files {
+		file, err := os.Open(upload.path)
+		if err != nil {
+			return nil, fmt.Errorf("opening upload file %q: %w", upload.name, err)
+		}
+
+		info, statErr := file.Stat()
+		if statErr != nil {
+			file.Close()
+			return nil, fmt.Errorf("reading upload file %q metadata: %w", upload.name, statErr)
+		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 || uint64(info.Size()) > uint64(^uint(0)>>1) {
+			file.Close()
+			return nil, fmt.Errorf("upload file %q must be a non-empty regular file with a supported size", upload.name)
+		}
+		resolvedPath, err := filepath.EvalSymlinks(upload.path)
+		if err != nil || !isPathWithinRoot(upload.root, resolvedPath) {
+			file.Close()
+			return nil, fmt.Errorf("upload file %q moved outside SLACK_MCP_FILES_UPLOAD_PATHS", upload.name)
+		}
+		currentInfo, err := os.Stat(resolvedPath)
+		if err != nil || !os.SameFile(info, currentInfo) {
+			file.Close()
+			return nil, fmt.Errorf("upload file %q changed after validation", upload.name)
+		}
+
+		uploadURL, err := client.GetUploadURLExternalContext(ctx, slack.GetUploadURLExternalParameters{
+			FileName: upload.name,
+			FileSize: int(info.Size()),
+		})
+		if err != nil {
+			file.Close()
+			return nil, fmt.Errorf("requesting upload URL for %q: %w", upload.name, err)
+		}
+
+		err = client.UploadToURL(ctx, slack.UploadToURLParameters{
+			UploadURL: uploadURL.UploadURL,
+			Reader:    file,
+			Filename:  upload.name,
+		})
+		closeErr := file.Close()
+		if err != nil {
+			return nil, fmt.Errorf("uploading %q: %w", upload.name, err)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("closing upload file %q: %w", upload.name, closeErr)
+		}
+
+		summaries = append(summaries, slack.FileSummary{ID: uploadURL.FileID, Title: upload.name})
+	}
+
+	completed, err := client.CompleteUploadExternalContext(ctx, slack.CompleteUploadExternalParameters{
+		Files:           summaries,
+		Blocks:          slack.Blocks{BlockSet: rendered.blocks},
+		Channel:         params.channel,
+		InitialComment:  rendered.initialComment,
+		ThreadTimestamp: params.threadTs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("completing file upload: %w", err)
+	}
+	if len(completed.Files) != len(summaries) {
+		return nil, fmt.Errorf("completing file upload returned %d file(s), expected %d", len(completed.Files), len(summaries))
+	}
+
+	return completed.Files, nil
+}
+
+func (ch *ConversationsHandler) markUploadedMessage(ctx context.Context, channel, threadTs, fileID string) error {
+	file, _, _, err := ch.apiProvider.Slack().GetFileInfoContext(ctx, fileID, 1, 1)
+	if err != nil {
+		return fmt.Errorf("reading uploaded file metadata: %w", err)
+	}
+
+	for _, shares := range [][]slack.ShareFileInfo{file.Shares.Public[channel], file.Shares.Private[channel]} {
+		for i := len(shares) - 1; i >= 0; i-- {
+			if threadTs == "" || shares[i].ThreadTs == threadTs {
+				return ch.apiProvider.Slack().MarkConversationContext(ctx, channel, shares[i].Ts)
+			}
+		}
+	}
+
+	return fmt.Errorf("uploaded message timestamp not found for channel %s", channel)
 }
 
 // ReactionsAddHandler adds an emoji reaction to a message
@@ -1486,6 +1626,93 @@ func isChannelAllowed(channel string) bool {
 	return isChannelAllowedForConfig(channel, os.Getenv("SLACK_MCP_ADD_MESSAGE_TOOL"))
 }
 
+func isTruthyEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateUploadPaths(paths []string) ([]uploadFile, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if !isTruthyEnv("SLACK_MCP_FILES_UPLOAD_TOOL") {
+		return nil, errors.New("file uploads are disabled; set SLACK_MCP_FILES_UPLOAD_TOOL=true to enable them")
+	}
+
+	rootConfig := os.Getenv("SLACK_MCP_FILES_UPLOAD_PATHS")
+	if strings.TrimSpace(rootConfig) == "" {
+		return nil, errors.New("SLACK_MCP_FILES_UPLOAD_PATHS must contain at least one allowed directory")
+	}
+
+	roots := make([]string, 0)
+	for _, configuredRoot := range strings.Split(rootConfig, ",") {
+		configuredRoot = strings.TrimSpace(configuredRoot)
+		if configuredRoot == "" {
+			continue
+		}
+		if !filepath.IsAbs(configuredRoot) {
+			return nil, fmt.Errorf("upload root %q must be an absolute path", configuredRoot)
+		}
+		resolvedRoot, err := filepath.EvalSymlinks(filepath.Clean(configuredRoot))
+		if err != nil {
+			return nil, fmt.Errorf("resolving upload root %q: %w", configuredRoot, err)
+		}
+		info, err := os.Stat(resolvedRoot)
+		if err != nil {
+			return nil, fmt.Errorf("reading upload root %q: %w", configuredRoot, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("upload root %q must be a directory", configuredRoot)
+		}
+		roots = append(roots, resolvedRoot)
+	}
+	if len(roots) == 0 {
+		return nil, errors.New("SLACK_MCP_FILES_UPLOAD_PATHS must contain at least one allowed directory")
+	}
+
+	files := make([]uploadFile, 0, len(paths))
+	for _, path := range paths {
+		if !filepath.IsAbs(path) {
+			return nil, fmt.Errorf("upload path %q must be absolute", path)
+		}
+		resolvedPath, err := filepath.EvalSymlinks(filepath.Clean(path))
+		if err != nil {
+			return nil, fmt.Errorf("resolving upload path %q: %w", path, err)
+		}
+		info, err := os.Stat(resolvedPath)
+		if err != nil {
+			return nil, fmt.Errorf("reading upload path %q: %w", path, err)
+		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 {
+			return nil, fmt.Errorf("upload path %q must be a non-empty regular file", path)
+		}
+
+		allowedRoot := ""
+		for _, root := range roots {
+			if isPathWithinRoot(root, resolvedPath) {
+				allowedRoot = root
+				break
+			}
+		}
+		if allowedRoot == "" {
+			return nil, fmt.Errorf("upload path %q is outside SLACK_MCP_FILES_UPLOAD_PATHS", path)
+		}
+
+		files = append(files, uploadFile{path: resolvedPath, name: filepath.Base(path), root: allowedRoot})
+	}
+
+	return files, nil
+}
+
+func isPathWithinRoot(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !filepath.IsAbs(relative) && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
 func (ch *ConversationsHandler) resolveChannelID(ctx context.Context, channel string) (string, error) {
 	if !strings.HasPrefix(channel, "#") && !strings.HasPrefix(channel, "@") {
 		return channel, nil
@@ -1826,10 +2053,15 @@ func (ch *ConversationsHandler) parseParamsToolAddMessage(ctx context.Context, r
 		}
 	}
 
-	// Require either text or blocks
-	if msgText == "" && blocks == nil {
-		ch.logger.Error("Message text and blocks both missing")
-		return nil, errors.New("either text or blocks must be provided")
+	files, err := validateUploadPaths(request.GetStringSlice("file_paths", nil))
+	if err != nil {
+		ch.logger.Error("Invalid file_paths", zap.Error(err))
+		return nil, err
+	}
+
+	if msgText == "" && blocks == nil && len(files) == 0 {
+		ch.logger.Error("Message text, blocks, and files all missing")
+		return nil, errors.New("at least one of text, blocks, or file_paths must be provided")
 	}
 
 	return &addMessageParams{
@@ -1838,6 +2070,7 @@ func (ch *ConversationsHandler) parseParamsToolAddMessage(ctx context.Context, r
 		text:        msgText,
 		contentType: contentType,
 		blocks:      blocks,
+		files:       files,
 	}, nil
 }
 

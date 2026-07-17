@@ -271,7 +271,9 @@ docker-compose up -d
 | `SLACK_MCP_SERVER_CA_INSECURE`    | No        | `false`                   | Trust all insecure requests (NOT RECOMMENDED)                                                                                                                                                                                                                                             |
 | `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `conversations_add_message` by setting it to `true` for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. If empty, the tool is only registered when explicitly listed in `SLACK_MCP_ENABLED_TOOLS`. |
 | `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When `conversations_add_message` is enabled (via `SLACK_MCP_ADD_MESSAGE_TOOL` or `SLACK_MCP_ENABLED_TOOLS`), setting this to `true` will automatically mark sent messages as read.                                                                                                        |
-| `SLACK_MCP_ADD_MESSAGE_UNFURLING` | No        | `nil`                     | Enable to let Slack unfurl posted links or set comma-separated list of domains e.g. `github.com,slack.com` to whitelist unfurling only for them. If text contains whitelisted and unknown domain unfurling will be disabled for security reasons.                                         |
+| `SLACK_MCP_ADD_MESSAGE_UNFURLING` | No        | `nil`                     | For messages without `file_paths`, enable Slack link unfurling or set a comma-separated domain whitelist such as `github.com,slack.com`. If text contains whitelisted and unknown domains, unfurling is disabled.                                                |
+| `SLACK_MCP_FILES_UPLOAD_TOOL`     | No        | `nil`                     | Enable the `file_paths` parameter on `conversations_add_message` by setting it to `true`, `1`, or `yes`.                                                                                                                   |
+| `SLACK_MCP_FILES_UPLOAD_PATHS`    | No        | `nil`                     | Comma-separated absolute directories whose files may be uploaded. Files in nested directories are allowed; resolved paths must remain inside an allowed directory.                                                       |
 | `SLACK_MCP_USERS_CACHE`           | No        | `.users_cache.json`       | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup.                                                                                                                                                                                |
 | `SLACK_MCP_CHANNELS_CACHE`        | No        | `.channels_cache_v2.json` | Path to the channels cache file. Used to cache Slack channel information to avoid repeated API calls on startup.                                                                                                                                                                          |
 | `SLACK_MCP_CACHE_TTL`             | No        | `24h`                     | Cache time-to-live. Supports duration format (`24h`, `30m`) or seconds (`3600`). Set to `0` to disable TTL (cache forever). When the cache expires, stale data is served immediately while a background refresh fetches fresh data.                                                       |
@@ -320,7 +322,21 @@ Use `SLACK_MCP_ADD_MESSAGE_TOOL` to enable messaging with channel restrictions:
 }
 ```
 
-**Example 3: Enable messaging without channel restrictions**
+**Example 3: Enable file uploads from allowed directories**
+
+Enable uploads on the existing message tool and list the directories that contain uploadable files:
+
+```json
+{
+  "env": {
+    "SLACK_MCP_ADD_MESSAGE_TOOL": "C123456789",
+    "SLACK_MCP_FILES_UPLOAD_TOOL": "true",
+    "SLACK_MCP_FILES_UPLOAD_PATHS": "/absolute/reports,/absolute/exports"
+  }
+}
+```
+
+**Example 4: Enable messaging without channel restrictions**
 
 Use `SLACK_MCP_ENABLED_TOOLS` to register write tools without restrictions:
 
@@ -333,7 +349,7 @@ Use `SLACK_MCP_ENABLED_TOOLS` to register write tools without restrictions:
 }
 ```
 
-**Example 4: Minimal read-only setup**
+**Example 5: Minimal read-only setup**
 
 Expose only specific tools:
 

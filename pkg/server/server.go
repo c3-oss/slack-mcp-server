@@ -113,6 +113,27 @@ func shouldAddTool(name string, enabledTools []string, envVarName string) bool {
 	return false
 }
 
+func isFilesUploadEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SLACK_MCP_FILES_UPLOAD_TOOL"))) {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func filesUploadToolOptions() []mcp.ToolOption {
+	if !isFilesUploadEnabled() {
+		return nil
+	}
+	return []mcp.ToolOption{
+		mcp.WithArray("file_paths",
+			mcp.WithStringItems(mcp.Description("Absolute path to a local file inside a directory allowed by SLACK_MCP_FILES_UPLOAD_PATHS.")),
+			mcp.Description("Files to attach to the message. All paths must be absolute and inside an allowed upload directory."),
+		),
+	}
+}
+
 func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledTools []string) *MCPServer {
 	s := server.NewMCPServer(
 		"Slack MCP Server",
@@ -177,7 +198,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 	}
 
 	if shouldAddTool(ToolConversationsAddMessage, enabledTools, "SLACK_MCP_ADD_MESSAGE_TOOL") {
-		s.AddTool(mcp.NewTool(ToolConversationsAddMessage,
+		messageToolOptions := []mcp.ToolOption{
 			mcp.WithDescription("Add a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts."),
 			mcp.WithTitleAnnotation("Send Message"),
 			mcp.WithDestructiveHintAnnotation(true),
@@ -196,9 +217,11 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 				mcp.Description("Content type of the message. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'. Ignored when blocks is provided."),
 			),
 			mcp.WithString("blocks",
-				mcp.Description("Raw Slack Block Kit JSON array for rich message formatting (rich_text lists, code blocks, etc.). When provided, this takes precedence over text/content_type for rendering. The text parameter becomes the notification fallback text."),
+				mcp.Description("Raw Slack Block Kit JSON array for rich message formatting (rich_text lists, code blocks, etc.). When provided, this takes precedence over text/content_type for rendering. Without file_paths, the text parameter becomes the notification fallback text."),
 			),
-		), conversationsHandler.ConversationsAddMessageHandler)
+		}
+		messageToolOptions = append(messageToolOptions, filesUploadToolOptions()...)
+		s.AddTool(mcp.NewTool(ToolConversationsAddMessage, messageToolOptions...), conversationsHandler.ConversationsAddMessageHandler)
 	}
 
 	if shouldAddTool(ToolReactionsAdd, enabledTools, "SLACK_MCP_REACTION_TOOL") {

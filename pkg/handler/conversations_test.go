@@ -3,8 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,13 +15,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/test/util"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/responses"
+	"github.com/slack-go/slack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestIntegrationConversations(t *testing.T) {
@@ -183,6 +189,165 @@ func TestIntegrationConversations(t *testing.T) {
 			}
 		})
 	}
+}
+
+type uploadTestSlackClient struct {
+	provider.SlackAPI
+	getParams       []slack.GetUploadURLExternalParameters
+	uploadPayloads  [][]byte
+	completeParams  *slack.CompleteUploadExternalParameters
+	failUploadAt    int
+	uploadCallCount int
+}
+
+func (c *uploadTestSlackClient) GetUploadURLExternalContext(_ context.Context, params slack.GetUploadURLExternalParameters) (*slack.GetUploadURLExternalResponse, error) {
+	c.getParams = append(c.getParams, params)
+	index := len(c.getParams) - 1
+	return &slack.GetUploadURLExternalResponse{UploadURL: fmt.Sprintf("https://upload.invalid/%d", index), FileID: fmt.Sprintf("F%d", index)}, nil
+}
+
+func (c *uploadTestSlackClient) UploadToURL(_ context.Context, params slack.UploadToURLParameters) error {
+	index := c.uploadCallCount
+	c.uploadCallCount++
+	if index == c.failUploadAt {
+		return errors.New("upload failed")
+	}
+	payload, err := io.ReadAll(params.Reader)
+	if err != nil {
+		return err
+	}
+	c.uploadPayloads = append(c.uploadPayloads, payload)
+	return nil
+}
+
+func (c *uploadTestSlackClient) CompleteUploadExternalContext(_ context.Context, params slack.CompleteUploadExternalParameters) (*slack.CompleteUploadExternalResponse, error) {
+	c.completeParams = &params
+	return &slack.CompleteUploadExternalResponse{Files: params.Files}, nil
+}
+
+func TestUnitValidateUploadPaths(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	require.NoError(t, os.Mkdir(nested, 0o755))
+	allowedFile := filepath.Join(nested, "allowed.txt")
+	require.NoError(t, os.WriteFile(allowedFile, []byte("allowed"), 0o600))
+
+	t.Run("allowed recursive path", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "true")
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_PATHS", root)
+		files, err := validateUploadPaths([]string{allowedFile})
+		require.NoError(t, err)
+		require.Len(t, files, 1)
+		assert.Equal(t, "allowed.txt", files[0].name)
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "false")
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_PATHS", root)
+		_, err := validateUploadPaths([]string{allowedFile})
+		assert.ErrorContains(t, err, "disabled")
+	})
+
+	t.Run("outside and sibling prefix", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "true")
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_PATHS", root)
+		outsideRoot := root + "-sibling"
+		require.NoError(t, os.Mkdir(outsideRoot, 0o755))
+		outsideFile := filepath.Join(outsideRoot, "outside.txt")
+		require.NoError(t, os.WriteFile(outsideFile, []byte("outside"), 0o600))
+		_, err := validateUploadPaths([]string{outsideFile})
+		assert.ErrorContains(t, err, "outside")
+	})
+
+	t.Run("symlink escape", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "true")
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_PATHS", root)
+		outsideRoot := t.TempDir()
+		outsideFile := filepath.Join(outsideRoot, "outside.txt")
+		require.NoError(t, os.WriteFile(outsideFile, []byte("outside"), 0o600))
+		link := filepath.Join(root, "escape.txt")
+		if err := os.Symlink(outsideFile, link); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		_, err := validateUploadPaths([]string{link})
+		assert.ErrorContains(t, err, "outside")
+	})
+
+	t.Run("comma separated roots", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "yes")
+		secondRoot := t.TempDir()
+		secondFile := filepath.Join(secondRoot, "second.txt")
+		require.NoError(t, os.WriteFile(secondFile, []byte("second"), 0o600))
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_PATHS", root+","+secondRoot)
+		files, err := validateUploadPaths([]string{allowedFile, secondFile})
+		require.NoError(t, err)
+		assert.Len(t, files, 2)
+	})
+
+	t.Run("empty and non regular files", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "true")
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_PATHS", root)
+		emptyFile := filepath.Join(root, "empty.txt")
+		require.NoError(t, os.WriteFile(emptyFile, nil, 0o600))
+		_, err := validateUploadPaths([]string{emptyFile})
+		assert.ErrorContains(t, err, "non-empty regular file")
+		_, err = validateUploadPaths([]string{nested})
+		assert.ErrorContains(t, err, "non-empty regular file")
+	})
+}
+
+func TestUnitUploadFilesCompletesOnce(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first.txt")
+	second := filepath.Join(root, "second.txt")
+	require.NoError(t, os.WriteFile(first, []byte("first"), 0o600))
+	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
+	t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "true")
+	t.Setenv("SLACK_MCP_FILES_UPLOAD_PATHS", root)
+	files, err := validateUploadPaths([]string{first, second})
+	require.NoError(t, err)
+
+	client := &uploadTestSlackClient{failUploadAt: -1}
+	completed, err := uploadFiles(context.Background(), client, &addMessageParams{
+		channel:  "C123",
+		threadTs: "123.456",
+		files:    files,
+	}, &renderedMessage{initialComment: "test message"})
+	require.NoError(t, err)
+	require.Len(t, completed, 2)
+	assert.Equal(t, []byte("first"), client.uploadPayloads[0])
+	assert.Equal(t, []byte("second"), client.uploadPayloads[1])
+	require.NotNil(t, client.completeParams)
+	assert.Equal(t, "C123", client.completeParams.Channel)
+	assert.Equal(t, "123.456", client.completeParams.ThreadTimestamp)
+	assert.Equal(t, "test message", client.completeParams.InitialComment)
+	assert.Equal(t, []slack.FileSummary{{ID: "F0", Title: "first.txt"}, {ID: "F1", Title: "second.txt"}}, client.completeParams.Files)
+}
+
+func TestUnitUploadFilesStopsBeforeCompletion(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first.txt")
+	second := filepath.Join(root, "second.txt")
+	require.NoError(t, os.WriteFile(first, []byte("first"), 0o600))
+	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
+	t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "true")
+	t.Setenv("SLACK_MCP_FILES_UPLOAD_PATHS", root)
+	files, err := validateUploadPaths([]string{first, second})
+	require.NoError(t, err)
+
+	client := &uploadTestSlackClient{failUploadAt: 1}
+	_, err = uploadFiles(context.Background(), client, &addMessageParams{channel: "C123", files: files}, &renderedMessage{})
+	assert.ErrorContains(t, err, "uploading \"second.txt\"")
+	assert.Nil(t, client.completeParams)
+}
+
+func TestUnitRenderFileOnlyMessage(t *testing.T) {
+	handler := &ConversationsHandler{logger: zap.NewNop()}
+	rendered, err := handler.renderMessage(&addMessageParams{contentType: "text/markdown"})
+	require.NoError(t, err)
+	assert.Empty(t, rendered.options)
+	assert.Empty(t, rendered.blocks)
+	assert.Empty(t, rendered.initialComment)
 }
 
 func TestUnitParseFlexibleDate(t *testing.T) {

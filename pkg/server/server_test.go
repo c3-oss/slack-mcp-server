@@ -254,6 +254,23 @@ func TestShouldAddTool_WriteTool_AddMessage(t *testing.T) {
 	})
 }
 
+func TestUnitFilesUploadToolSchema(t *testing.T) {
+	t.Run("enabled", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "true")
+		tool := mcp.NewTool(ToolConversationsAddMessage, filesUploadToolOptions()...)
+		property, ok := tool.InputSchema.Properties["file_paths"]
+		require.True(t, ok)
+		assert.Equal(t, "array", property.(map[string]any)["type"])
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FILES_UPLOAD_TOOL", "false")
+		tool := mcp.NewTool(ToolConversationsAddMessage, filesUploadToolOptions()...)
+		_, ok := tool.InputSchema.Properties["file_paths"]
+		assert.False(t, ok)
+	})
+}
+
 func TestShouldAddTool_WriteTool_Reactions(t *testing.T) {
 	t.Run("empty enabledTools and no env var - not registered", func(t *testing.T) {
 		cleanup := setEnv("SLACK_MCP_REACTION_TOOL", "")
