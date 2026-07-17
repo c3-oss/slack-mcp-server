@@ -6,7 +6,7 @@ Model Context Protocol (MCP) server for Slack Workspaces. The most powerful MCP 
 > [!IMPORTANT]  
 > We need your support! Each month, over 30,000 engineers visit this repository, and more than 9,000 are already using it.
 > 
-> If you appreciate the work our [contributors](https://github.com/korotovsky/slack-mcp-server/graphs/contributors) have put into this project, please consider giving the repository a star.
+> If you appreciate the work our [contributors](https://github.com/c3-oss/slack-mcp-server/graphs/contributors) have put into this project, please consider giving the repository a star.
 
 This feature-rich Slack MCP Server has:
 - **Stealth and OAuth Modes**: Run the server without requiring additional permissions or bot installations (stealth mode), or use secure OAuth tokens for access without needing to refresh or extract tokens from the browser (OAuth mode).
