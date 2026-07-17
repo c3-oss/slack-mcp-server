@@ -223,7 +223,7 @@ Or, the docker-compose way:
 
 ```bash
 wget -O docker-compose.yml https://github.com/c3-oss/slack-mcp-server/releases/latest/download/docker-compose.yml
-wget -O .env https://github.com/c3-oss/slack-mcp-server/releases/latest/download/.env.dist
+wget -O .env https://github.com/c3-oss/slack-mcp-server/releases/latest/download/default.env.dist
 nano .env # Edit .env file with your tokens from step 1 of the setup guide
 docker network create app-tier
 docker-compose up -d
