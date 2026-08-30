@@ -238,6 +238,37 @@ func TestBlocksToText(t *testing.T) {
 			want: "@channel please review",
 		},
 		{
+			name: "rich text quote and preformatted elements",
+			blocks: slack.Blocks{
+				BlockSet: []slack.Block{
+					&slack.RichTextBlock{
+						Type: slack.MBTRichText,
+						Elements: []slack.RichTextElement{
+							&slack.RichTextQuote{
+								Type: slack.RTEQuote,
+								Elements: []slack.RichTextSectionElement{
+									&slack.RichTextSectionTextElement{
+										Type: slack.RTSEText,
+										Text: "quoted",
+									},
+								},
+							},
+							&slack.RichTextPreformatted{
+								Type: slack.RTEPreformatted,
+								Elements: []slack.RichTextSectionElement{
+									&slack.RichTextSectionTextElement{
+										Type: slack.RTSEText,
+										Text: "code",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "quoted code",
+		},
+		{
 			name: "section block with nil text",
 			blocks: slack.Blocks{
 				BlockSet: []slack.Block{
