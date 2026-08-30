@@ -3,6 +3,10 @@
   "version": "0.0.0-dev",
   "description": "slack-mcp-server binary for macOS amd64 (Intel)",
   "homepage": "https://github.com/c3-oss/slack-mcp-server",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/c3-oss/slack-mcp-server.git"
+  },
   "license": "MIT",
   "os": ["darwin"],
   "cpu": ["x64"],
