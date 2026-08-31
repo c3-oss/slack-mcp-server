@@ -949,4 +949,3 @@ func TestFilesToTextProcessTextPipeline(t *testing.T) {
 		})
 	}
 }
-

@@ -216,6 +216,7 @@ type SlackAPI interface {
 	GetUsersContext(ctx context.Context, options ...slack.GetUsersOption) ([]slack.User, error)
 	GetUsersInfo(users ...string) (*[]slack.User, error)
 	PostMessageContext(ctx context.Context, channel string, options ...slack.MsgOption) (string, string, error)
+	ShareMessageContext(ctx context.Context, sourceChannel, sourceTimestamp, destinationChannel string, blocks []slack.Block) (string, string, error)
 	GetUploadURLExternalContext(ctx context.Context, params slack.GetUploadURLExternalParameters) (*slack.GetUploadURLExternalResponse, error)
 	UploadToURL(ctx context.Context, params slack.UploadToURLParameters) error
 	CompleteUploadExternalContext(ctx context.Context, params slack.CompleteUploadExternalParameters) (*slack.CompleteUploadExternalResponse, error)
@@ -534,6 +535,17 @@ func (c *MCPSlackClient) SearchContext(ctx context.Context, query string, params
 
 func (c *MCPSlackClient) PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 	return c.slackClient.PostMessageContext(ctx, channelID, options...)
+}
+
+func (c *MCPSlackClient) ShareMessageContext(ctx context.Context, sourceChannel, sourceTimestamp, destinationChannel string, blocks []slack.Block) (string, string, error) {
+	if c.isOAuth {
+		return "", "", errors.New("native message forwarding requires browser session authentication (xoxc/xoxd)")
+	}
+	response, err := c.edgeClient.ShareMessage(ctx, sourceChannel, sourceTimestamp, destinationChannel, blocks)
+	if err != nil {
+		return "", "", err
+	}
+	return response.Channel, response.Timestamp, nil
 }
 
 func (c *MCPSlackClient) GetUploadURLExternalContext(ctx context.Context, params slack.GetUploadURLExternalParameters) (*slack.GetUploadURLExternalResponse, error) {

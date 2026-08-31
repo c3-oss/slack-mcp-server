@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gocarina/gocsv"
 	"github.com/c3-oss/slack-mcp-server/pkg/limiter"
 	"github.com/c3-oss/slack-mcp-server/pkg/provider"
 	"github.com/c3-oss/slack-mcp-server/pkg/provider/edge"
 	"github.com/c3-oss/slack-mcp-server/pkg/server/auth"
 	"github.com/c3-oss/slack-mcp-server/pkg/text"
+	"github.com/gocarina/gocsv"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/slack-go/slack"
 	slackGoUtil "github.com/takara2314/slack-go-util"
@@ -44,6 +44,12 @@ var validFilterKeys = map[string]struct{}{
 	"on":     {},
 	"during": {},
 }
+
+var slackMessageTimestampPattern = regexp.MustCompile(`^[0-9]+\.[0-9]{6}$`)
+var slackChannelIDPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]{2,}$`)
+var slackUserIDPattern = regexp.MustCompile(`^[UW][A-Z0-9]{2,}$`)
+var slackUsergroupIDPattern = regexp.MustCompile(`^S[A-Z0-9]{2,}$`)
+var forwardCommentTokenPattern = regexp.MustCompile(`<[^>\n]+>`)
 
 type Message struct {
 	MsgID         string `json:"msgID"`
@@ -101,6 +107,13 @@ type addMessageParams struct {
 	contentType string
 	blocks      []slack.Block
 	files       []uploadFile
+}
+
+type forwardMessageParams struct {
+	sourceChannel      string
+	sourceTimestamp    string
+	destinationChannel string
+	comment            string
 }
 
 type uploadFile struct {
@@ -294,6 +307,135 @@ func (ch *ConversationsHandler) ConversationsAddMessageHandler(ctx context.Conte
 		return mcp.NewToolResultText(fmt.Sprintf("Successfully posted message to channel %s in thread %s (ts=%s)", respChannel, params.threadTs, respTimestamp)), nil
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("Successfully posted message to channel %s (ts=%s)", respChannel, respTimestamp)), nil
+}
+
+// ConversationsForwardMessageHandler forwards a message using Slack's native
+// share attachment rather than posting or unfurling its permalink.
+func (ch *ConversationsHandler) ConversationsForwardMessageHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ConversationsForwardMessageHandler called", zap.Any("params", request.Params))
+
+	if ready, err := ch.apiProvider.IsReady(); !ready {
+		ch.logger.Error("API provider not ready", zap.Error(err))
+		return nil, err
+	}
+
+	params, err := ch.parseParamsToolForwardMessage(ctx, request)
+	if err != nil {
+		ch.logger.Error("Failed to parse forward-message params", zap.Error(err))
+		return nil, err
+	}
+
+	blocks := buildForwardCommentBlocks(params.comment)
+
+	responseChannel, responseTimestamp, err := ch.apiProvider.Slack().ShareMessageContext(
+		ctx,
+		params.sourceChannel,
+		params.sourceTimestamp,
+		params.destinationChannel,
+		blocks,
+	)
+	if err != nil {
+		ch.logger.Error("Slack chat.shareMessage failed", zap.Error(err))
+		return nil, err
+	}
+	if responseChannel == "" {
+		responseChannel = params.destinationChannel
+	}
+
+	if responseTimestamp == "" {
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"Successfully forwarded message %s from channel %s to channel %s",
+			params.sourceTimestamp,
+			params.sourceChannel,
+			responseChannel,
+		)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf(
+		"Successfully forwarded message %s from channel %s to channel %s (ts=%s)",
+		params.sourceTimestamp,
+		params.sourceChannel,
+		responseChannel,
+		responseTimestamp,
+	)), nil
+}
+
+func buildForwardCommentBlocks(comment string) []slack.Block {
+	if comment == "" {
+		return nil
+	}
+
+	elements := make([]slack.RichTextSectionElement, 0)
+	remainingStart := 0
+	for _, match := range forwardCommentTokenPattern.FindAllStringIndex(comment, -1) {
+		element, ok := forwardCommentTokenElement(comment[match[0]:match[1]])
+		if !ok {
+			continue
+		}
+		if match[0] > remainingStart {
+			elements = append(elements, slack.NewRichTextSectionTextElement(comment[remainingStart:match[0]], nil))
+		}
+		elements = append(elements, element)
+		remainingStart = match[1]
+	}
+	if remainingStart < len(comment) {
+		elements = append(elements, slack.NewRichTextSectionTextElement(comment[remainingStart:], nil))
+	}
+	if len(elements) == 0 {
+		elements = append(elements, slack.NewRichTextSectionTextElement(comment, nil))
+	}
+
+	return []slack.Block{
+		slack.NewRichTextBlock("", slack.NewRichTextSection(elements...)),
+	}
+}
+
+func forwardCommentTokenElement(token string) (slack.RichTextSectionElement, bool) {
+	inner := strings.TrimSuffix(strings.TrimPrefix(token, "<"), ">")
+
+	if strings.HasPrefix(inner, "@") {
+		userID := strings.TrimPrefix(inner, "@")
+		if slackUserIDPattern.MatchString(userID) {
+			return slack.NewRichTextSectionUserElement(userID, nil), true
+		}
+		return nil, false
+	}
+
+	if strings.HasPrefix(inner, "#") {
+		channelID := strings.SplitN(strings.TrimPrefix(inner, "#"), "|", 2)[0]
+		if slackChannelIDPattern.MatchString(channelID) {
+			return slack.NewRichTextSectionChannelElement(channelID, nil), true
+		}
+		return nil, false
+	}
+
+	if strings.HasPrefix(inner, "!subteam^") {
+		usergroupID := strings.SplitN(strings.TrimPrefix(inner, "!subteam^"), "|", 2)[0]
+		if slackUsergroupIDPattern.MatchString(usergroupID) {
+			return slack.NewRichTextSectionUserGroupElement(usergroupID), true
+		}
+		return nil, false
+	}
+
+	if strings.HasPrefix(inner, "!") {
+		rangeName := strings.TrimPrefix(inner, "!")
+		switch rangeName {
+		case "channel", "everyone", "here":
+			return slack.NewRichTextSectionBroadcastElement(rangeName), true
+		}
+		return nil, false
+	}
+
+	linkParts := strings.SplitN(inner, "|", 2)
+	parsedURL, err := url.Parse(linkParts[0])
+	if err == nil && (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && parsedURL.Host != "" {
+		label := ""
+		if len(linkParts) == 2 {
+			label = linkParts[1]
+		}
+		return slack.NewRichTextSectionLinkElement(linkParts[0], label, nil), true
+	}
+
+	return nil, false
 }
 
 func (ch *ConversationsHandler) renderMessage(params *addMessageParams) (*renderedMessage, error) {
@@ -2072,6 +2214,116 @@ func (ch *ConversationsHandler) parseParamsToolAddMessage(ctx context.Context, r
 		blocks:      blocks,
 		files:       files,
 	}, nil
+}
+
+func (ch *ConversationsHandler) parseParamsToolForwardMessage(ctx context.Context, request mcp.CallToolRequest) (*forwardMessageParams, error) {
+	toolConfig := os.Getenv("SLACK_MCP_FORWARD_MESSAGE_TOOL")
+	if toolConfig == "" {
+		enabledTools := strings.Split(os.Getenv("SLACK_MCP_ENABLED_TOOLS"), ",")
+		explicitlyEnabled := false
+		for _, tool := range enabledTools {
+			if strings.TrimSpace(tool) == "conversations_forward_message" {
+				explicitlyEnabled = true
+				break
+			}
+		}
+		if !explicitlyEnabled {
+			return nil, errors.New(
+				"by default, the conversations_forward_message tool is disabled to prevent accidental posting. " +
+					"Set SLACK_MCP_FORWARD_MESSAGE_TOOL to true or a comma-separated destination-channel allowlist to enable it",
+			)
+		}
+		toolConfig = "true"
+	}
+
+	sourceChannel, sourceTimestamp, err := parseForwardMessageSource(
+		strings.TrimSpace(request.GetString("source_permalink", "")),
+		strings.TrimSpace(request.GetString("source_channel_id", "")),
+		strings.TrimSpace(request.GetString("source_timestamp", "")),
+	)
+	if err != nil {
+		return nil, err
+	}
+	sourceChannel, err = ch.resolveChannelID(ctx, sourceChannel)
+	if err != nil {
+		return nil, fmt.Errorf("resolving source channel: %w", err)
+	}
+
+	destinationChannel := strings.TrimSpace(request.GetString("destination_channel_id", ""))
+	if destinationChannel == "" {
+		return nil, errors.New("destination_channel_id is required")
+	}
+	destinationChannel, err = ch.resolveChannelID(ctx, destinationChannel)
+	if err != nil {
+		return nil, fmt.Errorf("resolving destination channel: %w", err)
+	}
+	if !isChannelAllowedForConfig(destinationChannel, toolConfig) {
+		return nil, fmt.Errorf(
+			"conversations_forward_message is not allowed for destination channel %q, applied policy: %s",
+			destinationChannel,
+			toolConfig,
+		)
+	}
+
+	return &forwardMessageParams{
+		sourceChannel:      sourceChannel,
+		sourceTimestamp:    sourceTimestamp,
+		destinationChannel: destinationChannel,
+		comment:            strings.TrimSpace(request.GetString("comment", "")),
+	}, nil
+}
+
+func parseForwardMessageSource(permalink, channel, timestamp string) (string, string, error) {
+	if permalink != "" {
+		if channel != "" || timestamp != "" {
+			return "", "", errors.New("provide source_permalink or source_channel_id with source_timestamp, not both")
+		}
+		return parseSlackMessagePermalink(permalink)
+	}
+
+	if channel == "" || timestamp == "" {
+		return "", "", errors.New("provide source_permalink or both source_channel_id and source_timestamp")
+	}
+	if !slackMessageTimestampPattern.MatchString(timestamp) {
+		return "", "", errors.New("source_timestamp must use Slack's 1234567890.123456 format")
+	}
+	return channel, timestamp, nil
+}
+
+func parseSlackMessagePermalink(rawURL string) (string, string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid source_permalink: %w", err)
+	}
+	if parsed.Scheme != "https" || !isSlackPermalinkHost(parsed.Hostname()) {
+		return "", "", errors.New("source_permalink must be an https://*.slack.com or https://*.slack-gov.com message URL")
+	}
+
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) != 3 || segments[0] != "archives" || !slackChannelIDPattern.MatchString(segments[1]) || !strings.HasPrefix(segments[2], "p") {
+		return "", "", errors.New("source_permalink must have the form https://workspace.slack.com/archives/CHANNEL_ID/pTIMESTAMP")
+	}
+
+	digits := strings.TrimPrefix(segments[2], "p")
+	if len(digits) <= 6 {
+		return "", "", errors.New("source_permalink contains an invalid message timestamp")
+	}
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return "", "", errors.New("source_permalink contains an invalid message timestamp")
+		}
+	}
+
+	timestamp := digits[:len(digits)-6] + "." + digits[len(digits)-6:]
+	if !slackMessageTimestampPattern.MatchString(timestamp) {
+		return "", "", errors.New("source_permalink contains an invalid message timestamp")
+	}
+	return segments[1], timestamp, nil
+}
+
+func isSlackPermalinkHost(host string) bool {
+	host = strings.ToLower(host)
+	return strings.HasSuffix(host, ".slack.com") || strings.HasSuffix(host, ".slack-gov.com")
 }
 
 func (ch *ConversationsHandler) parseParamsToolReaction(ctx context.Context, request mcp.CallToolRequest) (*addReactionParams, error) {
