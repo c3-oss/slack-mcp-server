@@ -97,6 +97,7 @@ func TestValidToolNames(t *testing.T) {
 			ToolConversationsHistory:        true,
 			ToolConversationsReplies:        true,
 			ToolConversationsAddMessage:     true,
+			ToolConversationsForwardMessage: true,
 			ToolReactionsAdd:                true,
 			ToolReactionsRemove:             true,
 			ToolAttachmentGetData:           true,
@@ -129,6 +130,7 @@ func TestValidToolNames(t *testing.T) {
 		assert.Equal(t, "conversations_history", ToolConversationsHistory)
 		assert.Equal(t, "conversations_replies", ToolConversationsReplies)
 		assert.Equal(t, "conversations_add_message", ToolConversationsAddMessage)
+		assert.Equal(t, "conversations_forward_message", ToolConversationsForwardMessage)
 		assert.Equal(t, "reactions_add", ToolReactionsAdd)
 		assert.Equal(t, "reactions_remove", ToolReactionsRemove)
 		assert.Equal(t, "attachment_get_data", ToolAttachmentGetData)
@@ -251,6 +253,27 @@ func TestShouldAddTool_WriteTool_AddMessage(t *testing.T) {
 
 		result := shouldAddTool(ToolConversationsAddMessage, []string{ToolConversationsHistory}, "SLACK_MCP_ADD_MESSAGE_TOOL")
 		assert.False(t, result, "write tool should NOT be registered when not in explicit enabledTools list")
+	})
+}
+
+func TestUnitShouldAddTool_WriteTool_ForwardMessage(t *testing.T) {
+	t.Run("not registered by default", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FORWARD_MESSAGE_TOOL", "")
+		assert.False(t, shouldAddTool(ToolConversationsForwardMessage, nil, "SLACK_MCP_FORWARD_MESSAGE_TOOL"))
+	})
+
+	t.Run("registered with destination policy", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FORWARD_MESSAGE_TOOL", "C123,C456")
+		assert.True(t, shouldAddTool(ToolConversationsForwardMessage, nil, "SLACK_MCP_FORWARD_MESSAGE_TOOL"))
+	})
+
+	t.Run("registered when explicitly enabled", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_FORWARD_MESSAGE_TOOL", "")
+		assert.True(t, shouldAddTool(
+			ToolConversationsForwardMessage,
+			[]string{ToolConversationsForwardMessage},
+			"SLACK_MCP_FORWARD_MESSAGE_TOOL",
+		))
 	})
 }
 

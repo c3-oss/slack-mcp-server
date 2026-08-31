@@ -28,6 +28,7 @@ const (
 	ToolConversationsHistory        = "conversations_history"
 	ToolConversationsReplies        = "conversations_replies"
 	ToolConversationsAddMessage     = "conversations_add_message"
+	ToolConversationsForwardMessage = "conversations_forward_message"
 	ToolReactionsAdd                = "reactions_add"
 	ToolReactionsRemove             = "reactions_remove"
 	ToolAttachmentGetData           = "attachment_get_data"
@@ -53,6 +54,7 @@ var ValidToolNames = []string{
 	ToolConversationsHistory,
 	ToolConversationsReplies,
 	ToolConversationsAddMessage,
+	ToolConversationsForwardMessage,
 	ToolReactionsAdd,
 	ToolReactionsRemove,
 	ToolAttachmentGetData,
@@ -222,6 +224,32 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 		}
 		messageToolOptions = append(messageToolOptions, filesUploadToolOptions()...)
 		s.AddTool(mcp.NewTool(ToolConversationsAddMessage, messageToolOptions...), conversationsHandler.ConversationsAddMessageHandler)
+	}
+
+	// Native forwarding relies on the internal chat.shareMessage endpoint and
+	// is only available through browser session authentication (xoxc/xoxd).
+	if !provider.IsBotToken() && !provider.IsOAuth() && shouldAddTool(ToolConversationsForwardMessage, enabledTools, "SLACK_MCP_FORWARD_MESSAGE_TOOL") {
+		s.AddTool(mcp.NewTool(ToolConversationsForwardMessage,
+			mcp.WithDescription("Forward an existing Slack message as a native embedded quote card, with an optional comment and no visible source permalink. Provide either source_permalink or both source_channel_id and source_timestamp. Requires browser session authentication (xoxc/xoxd)."),
+			mcp.WithTitleAnnotation("Forward Message"),
+			mcp.WithDestructiveHintAnnotation(true),
+			mcp.WithString("source_permalink",
+				mcp.Description("Slack message permalink in the form https://workspace.slack.com/archives/CHANNEL_ID/pTIMESTAMP. Use this instead of source_channel_id and source_timestamp."),
+			),
+			mcp.WithString("source_channel_id",
+				mcp.Description("Source channel ID, or a channel name beginning with # or @. Required with source_timestamp when source_permalink is omitted."),
+			),
+			mcp.WithString("source_timestamp",
+				mcp.Description("Timestamp of the source message in 1234567890.123456 format. Required with source_channel_id when source_permalink is omitted."),
+			),
+			mcp.WithString("destination_channel_id",
+				mcp.Required(),
+				mcp.Description("Destination channel ID, or a channel name beginning with # or @."),
+			),
+			mcp.WithString("comment",
+				mcp.Description("Optional comment to display above the forwarded quote. Slack-style user mentions such as <@U123ABC> are preserved as rich-text mentions; the source permalink is never added to this text."),
+			),
+		), conversationsHandler.ConversationsForwardMessageHandler)
 	}
 
 	if shouldAddTool(ToolReactionsAdd, enabledTools, "SLACK_MCP_REACTION_TOOL") {

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/c3-oss/slack-mcp-server/pkg/provider"
 	"github.com/c3-oss/slack-mcp-server/pkg/test/util"
+	"github.com/google/uuid"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
@@ -348,6 +349,94 @@ func TestUnitRenderFileOnlyMessage(t *testing.T) {
 	assert.Empty(t, rendered.options)
 	assert.Empty(t, rendered.blocks)
 	assert.Empty(t, rendered.initialComment)
+}
+
+func TestUnitParseForwardMessageSource(t *testing.T) {
+	t.Run("workspace permalink", func(t *testing.T) {
+		channel, timestamp, err := parseForwardMessageSource(
+			"https://acme.slack.com/archives/C123ABC/p1723456789123456?thread_ts=1723456000.000001",
+			"",
+			"",
+		)
+		require.NoError(t, err)
+		assert.Equal(t, "C123ABC", channel)
+		assert.Equal(t, "1723456789.123456", timestamp)
+	})
+
+	t.Run("GovSlack permalink", func(t *testing.T) {
+		channel, timestamp, err := parseForwardMessageSource(
+			"https://acme.slack-gov.com/archives/G123ABC/p1723456789123456",
+			"",
+			"",
+		)
+		require.NoError(t, err)
+		assert.Equal(t, "G123ABC", channel)
+		assert.Equal(t, "1723456789.123456", timestamp)
+	})
+
+	t.Run("explicit channel and timestamp", func(t *testing.T) {
+		channel, timestamp, err := parseForwardMessageSource("", "#general", "1723456789.123456")
+		require.NoError(t, err)
+		assert.Equal(t, "#general", channel)
+		assert.Equal(t, "1723456789.123456", timestamp)
+	})
+
+	t.Run("rejects ambiguous inputs", func(t *testing.T) {
+		_, _, err := parseForwardMessageSource(
+			"https://acme.slack.com/archives/C123ABC/p1723456789123456",
+			"C123ABC",
+			"1723456789.123456",
+		)
+		assert.ErrorContains(t, err, "not both")
+	})
+
+	t.Run("requires a complete explicit source", func(t *testing.T) {
+		_, _, err := parseForwardMessageSource("", "C123ABC", "")
+		assert.ErrorContains(t, err, "both source_channel_id and source_timestamp")
+	})
+
+	t.Run("validates explicit timestamp", func(t *testing.T) {
+		_, _, err := parseForwardMessageSource("", "C123ABC", "1723456789123456")
+		assert.ErrorContains(t, err, "1234567890.123456 format")
+	})
+
+	t.Run("rejects non-Slack host", func(t *testing.T) {
+		_, _, err := parseForwardMessageSource(
+			"https://acme.slack.com.evil.example/archives/C123ABC/p1723456789123456",
+			"",
+			"",
+		)
+		assert.ErrorContains(t, err, "slack.com")
+	})
+
+	t.Run("rejects malformed permalink path", func(t *testing.T) {
+		_, _, err := parseForwardMessageSource(
+			"https://acme.slack.com/client/T123/C123ABC",
+			"",
+			"",
+		)
+		assert.ErrorContains(t, err, "must have the form")
+	})
+}
+
+func TestUnitBuildForwardCommentBlocks(t *testing.T) {
+	t.Run("empty comment omits blocks", func(t *testing.T) {
+		assert.Nil(t, buildForwardCommentBlocks(""))
+	})
+
+	t.Run("plain comment uses a rich text wrapper", func(t *testing.T) {
+		blocks := buildForwardCommentBlocks("Please review")
+		encoded, err := json.Marshal(blocks)
+		require.NoError(t, err)
+		assert.JSONEq(t, `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"Please review"}]}]}]`, string(encoded))
+	})
+
+	t.Run("Slack mentions stay structured", func(t *testing.T) {
+		blocks := buildForwardCommentBlocks("<@U123ABC> share with <#C456DEF|general> <!here>")
+		encoded, err := json.Marshal(blocks)
+		require.NoError(t, err)
+		assert.JSONEq(t, `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"user","user_id":"U123ABC"},{"type":"text","text":" share with "},{"type":"channel","channel_id":"C456DEF"},{"type":"text","text":" "},{"type":"broadcast","range":"here"}]}]}]`, string(encoded))
+	})
 }
 
 func TestUnitParseFlexibleDate(t *testing.T) {

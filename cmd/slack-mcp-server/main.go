@@ -60,6 +60,15 @@ func main() {
 		)
 	}
 
+	forwardMessageToolEnv := os.Getenv("SLACK_MCP_FORWARD_MESSAGE_TOOL")
+	err = validateToolConfig(forwardMessageToolEnv)
+	if err != nil {
+		logger.Fatal("error in SLACK_MCP_FORWARD_MESSAGE_TOOL",
+			zap.String("context", "console"),
+			zap.Error(err),
+		)
+	}
+
 	err = server.ValidateEnabledTools(enabledTools)
 	if err != nil {
 		logger.Fatal("error in SLACK_MCP_ENABLED_TOOLS",
