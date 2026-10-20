@@ -47,35 +47,47 @@ func newDraftClient(t *testing.T, response string, capture *capturedDraftRequest
 	return &Client{cl: server.Client(), webclientAPI: server.URL + "/api/", token: "token", tape: nopTape{}}
 }
 
-func TestUnitDraftsCreateJSONAndUUID(t *testing.T) {
+// Slack's client only shows an API-created draft in the conversation composer when
+// the request mirrors the web client: form-encoded, is_from_composer=false and the
+// _x_ webclient fields (verified live; JSON or any single change alone is not enough).
+func TestUnitDraftsCreateFormAndUUID(t *testing.T) {
 	var first, second capturedDraftRequest
 	client := newDraftClient(t, `{"ok":true,"draft":{"id":"D1"}}`, &first)
 	got, err := client.DraftsCreate(context.Background(), DraftInput{ChannelID: "C1", Text: "hello", FileIDs: nil})
 	require.NoError(t, err)
 	require.Equal(t, "D1", got.ID)
 	require.Equal(t, "/api/drafts.create", first.path)
-	require.Equal(t, "application/json", first.contentType)
-	require.Equal(t, "Bearer token", first.auth)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(first.body, &body))
-	require.NotContains(t, body, "date_scheduled")
-	require.Equal(t, "[]", body["file_ids"])
+	require.Equal(t, "application/x-www-form-urlencoded", first.contentType)
+	form := first.form
+	require.Equal(t, "token", form.Get("token"))
+	require.Equal(t, "false", form.Get("is_from_composer"))
+	requireWebclientFields(t, form, "drafts-api/createDraft")
+	require.NotContains(t, form, "date_scheduled")
+	require.Equal(t, "[]", form.Get("file_ids"))
 	var destinations []map[string]any
-	require.NoError(t, json.Unmarshal([]byte(body["destinations"].(string)), &destinations))
-	require.Equal(t, map[string]any{"channel_id": "C1"}, destinations[0])
+	require.NoError(t, json.Unmarshal([]byte(form.Get("destinations")), &destinations))
+	require.Equal(t, []map[string]any{{"channel_id": "C1"}}, destinations)
 	var blocks []map[string]any
-	require.NoError(t, json.Unmarshal([]byte(body["blocks"].(string)), &blocks))
+	require.NoError(t, json.Unmarshal([]byte(form.Get("blocks")), &blocks))
 	require.Equal(t, "rich_text", blocks[0]["type"])
 	require.Equal(t, "hello", blocks[0]["elements"].([]any)[0].(map[string]any)["elements"].([]any)[0].(map[string]any)["text"])
-	firstID, ok := uuid.Parse(body["client_msg_id"].(string))
-	require.NoError(t, ok)
-	require.NotEqual(t, uuid.Nil, firstID)
-	client = newDraftClient(t, `{"ok":true}`, &second)
-	_, err = client.DraftsCreate(context.Background(), DraftInput{ChannelID: "C1", Text: "two"})
+	firstID, err := uuid.Parse(form.Get("client_msg_id"))
 	require.NoError(t, err)
-	var body2 map[string]any
-	require.NoError(t, json.Unmarshal(second.body, &body2))
-	require.NotEqual(t, body["client_msg_id"], body2["client_msg_id"])
+	require.NotEqual(t, uuid.Nil, firstID)
+
+	client = newDraftClient(t, `{"ok":true}`, &second)
+	_, err = client.DraftsCreate(context.Background(), DraftInput{ChannelID: "C1", Text: "two", DateScheduled: "1800000000"})
+	require.NoError(t, err)
+	require.NotEqual(t, form.Get("client_msg_id"), second.form.Get("client_msg_id"))
+	require.Equal(t, "1800000000", second.form.Get("date_scheduled"))
+}
+
+func requireWebclientFields(t *testing.T, form url.Values, reason string) {
+	t.Helper()
+	require.Equal(t, reason, form.Get("_x_reason"))
+	require.Equal(t, "online", form.Get("_x_mode"))
+	require.Equal(t, "true", form.Get("_x_sonic"))
+	require.Equal(t, "client", form.Get("_x_app_name"))
 }
 
 func TestUnitDraftsUpdateAndList(t *testing.T) {
@@ -85,12 +97,12 @@ func TestUnitDraftsUpdateAndList(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "D2", got.ID)
 	require.Equal(t, "/api/drafts.update", update.path)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(update.body, &body))
-	require.Equal(t, "D2", body["draft_id"])
-	require.Equal(t, "1700000000.1000000", body["client_last_updated_ts"])
-	require.NotContains(t, body, "is_from_composer")
-	require.NotContains(t, body, "date_scheduled")
+	require.Equal(t, "application/x-www-form-urlencoded", update.contentType)
+	require.Equal(t, "D2", update.form.Get("draft_id"))
+	require.Equal(t, "1700000000.1000000", update.form.Get("client_last_updated_ts"))
+	requireWebclientFields(t, update.form, "drafts-api/updateDraft")
+	require.NotContains(t, update.form, "is_from_composer")
+	require.NotContains(t, update.form, "date_scheduled")
 	var listed capturedDraftRequest
 	client = newDraftClient(t, `{"ok":true,"drafts":[{"id":"D1","date_created":1700}]}`, &listed)
 	active := false

@@ -93,9 +93,13 @@ type richTextBlock struct {
 	Elements []richTextSection `json:"elements"`
 }
 
-// draftBody builds the Slack payload. Slack requires blocks, destinations, and
-// file_ids to be JSON strings nested inside the outer JSON body.
-func draftBody(in DraftInput) (map[string]any, error) {
+// draftForm builds the form payload for drafts.create / drafts.update.
+//
+// It mirrors Slack's web client: form-encoded, with blocks, destinations and
+// file_ids as JSON strings and the _x_ webclient fields. Verified live, Slack
+// only shows an API-created draft in the conversation composer (not just the
+// drafts list) when the request has this shape.
+func draftForm(in DraftInput, reason string) (url.Values, error) {
 	blocks := []richTextBlock{{Type: "rich_text", Elements: []richTextSection{{Type: "rich_text_section", Elements: []richTextElement{{Type: "text", Text: in.Text}}}}}}
 	destination := DraftDestination{ChannelID: in.ChannelID}
 	if in.ThreadTS != "" {
@@ -118,7 +122,29 @@ func draftBody(in DraftInput) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"blocks": blocksJSON, "destinations": destinationsJSON, "file_ids": fileIDsJSON, "client_msg_id": uuid.New().String()}, nil
+	form := values(webclientReason(reason), true)
+	form.Set("blocks", blocksJSON)
+	form.Set("destinations", destinationsJSON)
+	form.Set("file_ids", fileIDsJSON)
+	form.Set("client_msg_id", uuid.New().String())
+	return form, nil
+}
+
+// postDraftMutation sends a drafts.create / drafts.update form and returns the
+// resulting draft.
+func (cl *Client) postDraftMutation(ctx context.Context, method string, form url.Values) (Draft, error) {
+	resp, err := cl.PostForm(ctx, method, form)
+	if err != nil {
+		return Draft{}, err
+	}
+	var out draftMutationResponse
+	if err := cl.ParseResponse(&out, resp); err != nil {
+		return Draft{}, err
+	}
+	if err := out.validate(method); err != nil {
+		return Draft{}, err
+	}
+	return out.Draft, nil
 }
 
 // PostJSONWebclient posts a JSON request to Slack's session webclient API.
@@ -159,47 +185,28 @@ func (cl *Client) DraftsList(ctx context.Context, isActive *bool, limit int) (Dr
 
 // DraftsCreate creates a draft and returns Slack's resulting draft record.
 func (cl *Client) DraftsCreate(ctx context.Context, in DraftInput) (Draft, error) {
-	body, err := draftBody(in)
+	form, err := draftForm(in, "drafts-api/createDraft")
 	if err != nil {
 		return Draft{}, err
 	}
-	body["is_from_composer"] = "true"
+	// "false" is required for the draft to appear in the conversation composer;
+	// omitting the field is rejected with invalid_arguments.
+	form.Set("is_from_composer", "false")
 	if in.DateScheduled != "" {
-		body["date_scheduled"] = in.DateScheduled
+		form.Set("date_scheduled", in.DateScheduled)
 	}
-	resp, err := cl.PostJSONWebclient(ctx, "drafts.create", body)
-	if err != nil {
-		return Draft{}, err
-	}
-	var out draftMutationResponse
-	if err := cl.ParseResponse(&out, resp); err != nil {
-		return Draft{}, err
-	}
-	if err := out.validate("drafts.create"); err != nil {
-		return Draft{}, err
-	}
-	return out.Draft, nil
+	return cl.postDraftMutation(ctx, "drafts.create", form)
 }
 
 // DraftsUpdate updates a draft and returns Slack's resulting draft record.
 func (cl *Client) DraftsUpdate(ctx context.Context, draftID, ts string, in DraftInput) (Draft, error) {
-	body, err := draftBody(in)
+	form, err := draftForm(in, "drafts-api/updateDraft")
 	if err != nil {
 		return Draft{}, err
 	}
-	body["draft_id"], body["client_last_updated_ts"] = draftID, padDraftTs(ts)
-	resp, err := cl.PostJSONWebclient(ctx, "drafts.update", body)
-	if err != nil {
-		return Draft{}, err
-	}
-	var out draftMutationResponse
-	if err := cl.ParseResponse(&out, resp); err != nil {
-		return Draft{}, err
-	}
-	if err := out.validate("drafts.update"); err != nil {
-		return Draft{}, err
-	}
-	return out.Draft, nil
+	form.Set("draft_id", draftID)
+	form.Set("client_last_updated_ts", padDraftTs(ts))
+	return cl.postDraftMutation(ctx, "drafts.update", form)
 }
 
 // DraftsDelete deletes a draft using Slack's form-encoded endpoint.
