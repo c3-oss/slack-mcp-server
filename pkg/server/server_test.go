@@ -117,6 +117,10 @@ func TestValidToolNames(t *testing.T) {
 			ToolSavedList:                   true,
 			ToolSavedUpdate:                 true,
 			ToolSavedClearCompleted:         true,
+			ToolDraftsList:                  true,
+			ToolDraftsCreate:                true,
+			ToolDraftsUpdate:                true,
+			ToolDraftsDelete:                true,
 		}
 
 		assert.Equal(t, len(expectedTools), len(ValidToolNames), "ValidToolNames should have %d tools", len(expectedTools))
@@ -150,6 +154,10 @@ func TestValidToolNames(t *testing.T) {
 		assert.Equal(t, "saved_list", ToolSavedList)
 		assert.Equal(t, "saved_update", ToolSavedUpdate)
 		assert.Equal(t, "saved_clear_completed", ToolSavedClearCompleted)
+		assert.Equal(t, "drafts_list", ToolDraftsList)
+		assert.Equal(t, "drafts_create", ToolDraftsCreate)
+		assert.Equal(t, "drafts_update", ToolDraftsUpdate)
+		assert.Equal(t, "drafts_delete", ToolDraftsDelete)
 	})
 }
 
@@ -253,6 +261,39 @@ func TestShouldAddTool_WriteTool_AddMessage(t *testing.T) {
 
 		result := shouldAddTool(ToolConversationsAddMessage, []string{ToolConversationsHistory}, "SLACK_MCP_ADD_MESSAGE_TOOL")
 		assert.False(t, result, "write tool should NOT be registered when not in explicit enabledTools list")
+	})
+}
+
+func TestUnitDraftToolRegistration(t *testing.T) {
+	drafts := []string{ToolDraftsList, ToolDraftsCreate, ToolDraftsUpdate, ToolDraftsDelete}
+	cases := []struct {
+		name    string
+		env     string
+		enabled []string
+		want    map[string]bool
+	}{
+		{"session default", "", nil, map[string]bool{ToolDraftsList: true}},
+		{"session all", "true", nil, map[string]bool{ToolDraftsList: true, ToolDraftsCreate: true, ToolDraftsUpdate: true, ToolDraftsDelete: true}},
+		{"session explicit create", "", []string{ToolDraftsCreate}, map[string]bool{ToolDraftsCreate: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SLACK_MCP_DRAFTS_TOOL", tc.env)
+			for _, tool := range drafts {
+				// drafts_list is read-only and ungated; the write tools are gated by SLACK_MCP_DRAFTS_TOOL.
+				gateEnv := "SLACK_MCP_DRAFTS_TOOL"
+				if tool == ToolDraftsList {
+					gateEnv = ""
+				}
+				assert.Equal(t, tc.want[tool], shouldAddTool(tool, tc.enabled, gateEnv), tool)
+			}
+			assert.Equal(t, len(tc.enabled) == 0, shouldAddTool(ToolSavedList, tc.enabled, ""))
+			assert.False(t, shouldAddTool(ToolConversationsForwardMessage, tc.enabled, "SLACK_MCP_FORWARD_MESSAGE_TOOL"))
+		})
+	}
+	t.Run("bot and OAuth exclude all drafts while saved and forwarding are session-only", func(t *testing.T) {
+		assert.False(t, isSessionAuthProviderForKinds(true, false))
+		assert.False(t, isSessionAuthProviderForKinds(false, true))
 	})
 }
 

@@ -48,6 +48,10 @@ const (
 	ToolSavedList                   = "saved_list"
 	ToolSavedUpdate                 = "saved_update"
 	ToolSavedClearCompleted         = "saved_clear_completed"
+	ToolDraftsList                  = "drafts_list"
+	ToolDraftsCreate                = "drafts_create"
+	ToolDraftsUpdate                = "drafts_update"
+	ToolDraftsDelete                = "drafts_delete"
 )
 
 var ValidToolNames = []string{
@@ -74,6 +78,10 @@ var ValidToolNames = []string{
 	ToolSavedList,
 	ToolSavedUpdate,
 	ToolSavedClearCompleted,
+	ToolDraftsList,
+	ToolDraftsCreate,
+	ToolDraftsUpdate,
+	ToolDraftsDelete,
 }
 
 func ValidateEnabledTools(tools []string) error {
@@ -94,6 +102,14 @@ func ValidateEnabledTools(tools []string) error {
 			strings.Join(ValidToolNames, ", "))
 	}
 	return nil
+}
+
+func isSessionAuthProviderForKinds(isBot, isOAuth bool) bool {
+	return !isBot && !isOAuth
+}
+
+func isSessionAuthProvider(p *provider.ApiProvider) bool {
+	return isSessionAuthProviderForKinds(p.IsBotToken(), p.IsOAuth())
 }
 
 func shouldAddTool(name string, enabledTools []string, envVarName string) bool {
@@ -583,6 +599,39 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 				mcp.Description("Comma-separated user IDs that will become the COMPLETE member list (e.g., 'U0123456789,U9876543210'). All current members not in this list will be removed."),
 			),
 		), usergroupsHandler.UsergroupsUsersUpdateHandler)
+	}
+
+	// Drafts are browser-session webclient tools (xoxc/xoxd only).
+	if isSessionAuthProvider(provider) {
+		draftsHandler := handler.NewDraftsHandler(provider, logger, conversationsHandler)
+		if shouldAddTool(ToolDraftsList, enabledTools, "") {
+			s.AddTool(mcp.NewTool(ToolDraftsList,
+				mcp.WithDescription("List Slack drafts. This requires session authentication (xoxc/xoxd). Use the DraftID, timestamps, and destination channel IDs returned here for update/delete."),
+				mcp.WithTitleAnnotation("List Drafts"), mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithBoolean("is_active", mcp.Description("Only return active (unsent) drafts.")),
+				mcp.WithNumber("limit", mcp.Description("Maximum drafts to return.")),
+			), draftsHandler.DraftsListHandler)
+		}
+		if shouldAddTool(ToolDraftsCreate, enabledTools, "SLACK_MCP_DRAFTS_TOOL") {
+			s.AddTool(mcp.NewTool(ToolDraftsCreate,
+				mcp.WithDescription("Create a draft. A date_scheduled draft will be SENT by Slack at that time and requires the channel to be allowed by SLACK_MCP_ADD_MESSAGE_TOOL."), mcp.WithTitleAnnotation("Create Draft"), mcp.WithDestructiveHintAnnotation(true),
+				mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID, or a channel name beginning with # or @.")),
+				mcp.WithString("text", mcp.Required(), mcp.Description("Draft message text.")), mcp.WithString("thread_ts", mcp.Description("Optional parent thread timestamp.")),
+				mcp.WithBoolean("broadcast", mcp.Description("Broadcast a threaded reply when posted.")), mcp.WithString("file_ids", mcp.Description("Comma-separated uploaded file IDs.")), mcp.WithString("date_scheduled", mcp.Description("Optional Unix seconds; Slack will send the draft at this time.")),
+			), draftsHandler.DraftsCreateHandler)
+		}
+		if shouldAddTool(ToolDraftsUpdate, enabledTools, "SLACK_MCP_DRAFTS_TOOL") {
+			s.AddTool(mcp.NewTool(ToolDraftsUpdate,
+				mcp.WithDescription("Update a draft using the ID and timestamp from drafts_list. The server pads client_last_updated_ts to Slack's required precision. Session authentication (xoxc/xoxd) only."), mcp.WithTitleAnnotation("Update Draft"), mcp.WithDestructiveHintAnnotation(true),
+				mcp.WithString("draft_id", mcp.Required(), mcp.Description("Draft ID from drafts_list.")), mcp.WithString("client_last_updated_ts", mcp.Required(), mcp.Description("LastUpdatedTs from drafts_list.")), mcp.WithString("channel_id", mcp.Required(), mcp.Description("Destination channel ID or #name/@user.")), mcp.WithString("text", mcp.Required(), mcp.Description("Updated draft text.")), mcp.WithString("thread_ts", mcp.Description("Optional parent thread timestamp.")), mcp.WithBoolean("broadcast", mcp.Description("Broadcast a threaded reply when posted.")), mcp.WithString("file_ids", mcp.Description("Comma-separated uploaded file IDs.")),
+			), draftsHandler.DraftsUpdateHandler)
+		}
+		if shouldAddTool(ToolDraftsDelete, enabledTools, "SLACK_MCP_DRAFTS_TOOL") {
+			s.AddTool(mcp.NewTool(ToolDraftsDelete,
+				mcp.WithDescription("Delete a draft using session authentication (xoxc/xoxd). With an allow-all policy and an explicit timestamp it deletes directly; otherwise it looks up the draft and refuses if it is not found, its destination is unknown, or its channel is not allowed."), mcp.WithTitleAnnotation("Delete Draft"), mcp.WithDestructiveHintAnnotation(true),
+				mcp.WithString("draft_id", mcp.Required(), mcp.Description("Draft ID from drafts_list.")), mcp.WithString("client_last_updated_ts", mcp.Description("Optional timestamp from drafts_list; otherwise it is looked up.")),
+			), draftsHandler.DraftsDeleteHandler)
+		}
 	}
 
 	// Register saved items tools — "Save for Later" panel management.

@@ -252,6 +252,20 @@ Clear all completed saved items from the "Save for Later" panel. This is a bulk 
 
 - **Parameters:** None.
 
+### 20. drafts_list
+List drafts for the authenticated user. Session authentication (`xoxc`/`xoxd`) only; use the returned draft IDs, destination channel IDs, and timestamps for write operations.
+
+### 21. drafts_create
+Create a draft. A scheduled draft is SENT by Slack at its scheduled time, so its channel must be allowed by `SLACK_MCP_ADD_MESSAGE_TOOL` (or `conversations_add_message` must be explicitly enabled).
+
+### 22. drafts_update
+Update a draft using values from `drafts_list`; the server pads `client_last_updated_ts` to seven decimal places.
+
+### 23. drafts_delete
+Delete a draft. With an allow-all drafts policy and an explicit timestamp, deletion is direct. Otherwise the server looks it up and refuses when it is missing, its destination is unknown, or its channel is not allowed.
+
+All draft tools require session authentication. Write tools use `SLACK_MCP_DRAFTS_TOOL`: `true`, `1`, or `yes` enables all channels; comma-separated values allowlist channels; `!channel` entries form a denylist. When empty, write tools require exact-name listing in `SLACK_MCP_ENABLED_TOOLS`.
+
 ## Resources
 
 The Slack MCP Server exposes two special directory resources for easy access to workspace metadata:
@@ -303,6 +317,7 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_SERVER_CA`             | No        | `nil`                     | Path to CA certificate                                                                                                                                                                                                                                                                    |
 | `SLACK_MCP_SERVER_CA_TOOLKIT`     | No        | `nil`                     | Inject HTTPToolkit CA certificate to root trust-store for MitM debugging                                                                                                                                                                                                                  |
 | `SLACK_MCP_SERVER_CA_INSECURE`    | No        | `false`                   | Trust all insecure requests (NOT RECOMMENDED)                                                                                                                                                                                                                                             |
+| `SLACK_MCP_DRAFTS_TOOL`           | No        | `nil`                     | Enable draft write tools with true/allowlist/!denylist; empty requires explicit enabled-tools listing. Session auth only; scheduled drafts also require `SLACK_MCP_ADD_MESSAGE_TOOL`. |
 | `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `conversations_add_message` by setting it to `true` for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. If empty, the tool is only registered when explicitly listed in `SLACK_MCP_ENABLED_TOOLS`. |
 | `SLACK_MCP_FORWARD_MESSAGE_TOOL`  | No        | `nil`                     | Enable native forwarding via `conversations_forward_message` for `xoxc`/`xoxd` sessions. Set to `true` for all destination channels, a comma-separated destination-channel allowlist, or a `!`-prefixed denylist. If empty, the tool is only registered when explicitly listed in `SLACK_MCP_ENABLED_TOOLS`. |
 | `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When `conversations_add_message` is enabled (via `SLACK_MCP_ADD_MESSAGE_TOOL` or `SLACK_MCP_ENABLED_TOOLS`), setting this to `true` will automatically mark sent messages as read.                                                                                                        |
