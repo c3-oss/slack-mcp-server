@@ -254,6 +254,10 @@ type SlackAPI interface {
 	SavedList(ctx context.Context, filter string, limit int, cursor string) (edge.SavedListResponse, error)
 	SavedUpdate(ctx context.Context, itemType, itemID, ts, mark string, dateDue int64) error
 	SavedClearCompleted(ctx context.Context) error
+	DraftsList(ctx context.Context, isActive *bool, limit int) (edge.DraftsListResponse, error)
+	DraftsCreate(ctx context.Context, input edge.DraftInput) (edge.Draft, error)
+	DraftsUpdate(ctx context.Context, draftID, clientLastUpdatedTs string, input edge.DraftInput) (edge.Draft, error)
+	DraftsDelete(ctx context.Context, draftID, clientLastUpdatedTs string) error
 
 	// User groups API methods
 	GetUserGroupsContext(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
@@ -606,6 +610,19 @@ func (c *MCPSlackClient) SavedUpdate(ctx context.Context, itemType, itemID, ts, 
 
 func (c *MCPSlackClient) SavedClearCompleted(ctx context.Context) error {
 	return c.edgeClient.SavedClearCompleted(ctx)
+}
+
+func (c *MCPSlackClient) DraftsList(ctx context.Context, isActive *bool, limit int) (edge.DraftsListResponse, error) {
+	return c.edgeClient.DraftsList(ctx, isActive, limit)
+}
+func (c *MCPSlackClient) DraftsCreate(ctx context.Context, input edge.DraftInput) (edge.Draft, error) {
+	return c.edgeClient.DraftsCreate(ctx, input)
+}
+func (c *MCPSlackClient) DraftsUpdate(ctx context.Context, draftID, ts string, input edge.DraftInput) (edge.Draft, error) {
+	return c.edgeClient.DraftsUpdate(ctx, draftID, ts, input)
+}
+func (c *MCPSlackClient) DraftsDelete(ctx context.Context, draftID, ts string) error {
+	return c.edgeClient.DraftsDelete(ctx, draftID, ts)
 }
 
 func (c *MCPSlackClient) GetUserGroupsContext(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error) {
