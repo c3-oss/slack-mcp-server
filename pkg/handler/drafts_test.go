@@ -263,7 +263,9 @@ func TestUnitDraftsUpdateHandler(t *testing.T) {
 	t.Run("maps input and returns the updated draft", func(t *testing.T) {
 		clearDraftsEnv(t)
 		t.Setenv("SLACK_MCP_DRAFTS_TOOL", "C1")
-		api := &fakeDraftsAPI{}
+		api := &fakeDraftsAPI{listResponse: edge.DraftsListResponse{Drafts: []edge.Draft{
+			{ID: "Dr1", LastUpdatedTs: "1700000000.1", Destinations: []edge.DraftDestination{{ChannelID: "C1"}}},
+		}}}
 		args := baseArgs()
 		args["file_ids"] = "F1"
 		result, err := newTestDraftsHandler(api).DraftsUpdateHandler(context.Background(), draftsRequest(args))
@@ -306,12 +308,62 @@ func TestUnitDraftsUpdateHandler(t *testing.T) {
 		assert.ErrorContains(t, err, "drafts_update tool is disabled")
 		assert.Empty(t, api.updateCalls)
 	})
+
+	scheduledDraft := edge.DraftsListResponse{Drafts: []edge.Draft{{
+		ID:            "Dr1",
+		LastUpdatedTs: "1700000000.1",
+		Destinations:  []edge.DraftDestination{{ChannelID: "C1"}},
+		DateScheduled: "1800000000",
+	}}}
+
+	t.Run("rejects retargeting a scheduled draft to a channel add-message forbids", func(t *testing.T) {
+		clearDraftsEnv(t)
+		t.Setenv("SLACK_MCP_DRAFTS_TOOL", "true")
+		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "C1")
+		api := &fakeDraftsAPI{listResponse: scheduledDraft}
+		args := baseArgs()
+		args["channel_id"] = "C2"
+		_, err := newTestDraftsHandler(api).DraftsUpdateHandler(context.Background(), draftsRequest(args))
+		assert.ErrorContains(t, err, "SLACK_MCP_ADD_MESSAGE_TOOL")
+		assert.Empty(t, api.updateCalls)
+	})
+
+	t.Run("allows editing a scheduled draft in a channel add-message permits", func(t *testing.T) {
+		clearDraftsEnv(t)
+		t.Setenv("SLACK_MCP_DRAFTS_TOOL", "true")
+		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "C1")
+		api := &fakeDraftsAPI{listResponse: scheduledDraft}
+		_, err := newTestDraftsHandler(api).DraftsUpdateHandler(context.Background(), draftsRequest(baseArgs()))
+		require.NoError(t, err)
+		assert.Len(t, api.updateCalls, 1)
+	})
+
+	t.Run("rejects editing a draft whose current destination the policy forbids", func(t *testing.T) {
+		clearDraftsEnv(t)
+		t.Setenv("SLACK_MCP_DRAFTS_TOOL", "!C1")
+		api := &fakeDraftsAPI{listResponse: scheduledDraft}
+		args := baseArgs()
+		args["channel_id"] = "C2"
+		_, err := newTestDraftsHandler(api).DraftsUpdateHandler(context.Background(), draftsRequest(args))
+		assert.ErrorContains(t, err, "not allowed for channel \"C1\"")
+		assert.Empty(t, api.updateCalls)
+	})
+
+	t.Run("rejects unknown draft", func(t *testing.T) {
+		clearDraftsEnv(t)
+		t.Setenv("SLACK_MCP_DRAFTS_TOOL", "true")
+		api := &fakeDraftsAPI{}
+		_, err := newTestDraftsHandler(api).DraftsUpdateHandler(context.Background(), draftsRequest(baseArgs()))
+		assert.ErrorContains(t, err, "draft_not_found")
+		assert.Empty(t, api.updateCalls)
+	})
 }
 
 func TestUnitDraftsDeleteHandler(t *testing.T) {
 	listed := edge.DraftsListResponse{Drafts: []edge.Draft{
 		{ID: "Dr1", LastUpdatedTs: "1700000000.1234567", Destinations: []edge.DraftDestination{{ChannelID: "C1"}}},
 		{ID: "Dr2", LastUpdatedTs: "1700000000.7654321"},
+		{ID: "Dr3", LastUpdatedTs: "1700000000.3", Destinations: []edge.DraftDestination{{ChannelID: "C1"}, {ChannelID: "C2"}}},
 	}}
 
 	tests := []struct {
@@ -354,6 +406,13 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 			env:           map[string]string{"SLACK_MCP_DRAFTS_TOOL": "!C9"},
 			args:          map[string]any{"draft_id": "Dr2"},
 			errContains:   "destination channel is unknown",
+			wantListCalls: 1,
+		},
+		{
+			name:          "restricted policy checks every destination",
+			env:           map[string]string{"SLACK_MCP_DRAFTS_TOOL": "C1"},
+			args:          map[string]any{"draft_id": "Dr3"},
+			errContains:   "not allowed for channel \"C2\"",
 			wantListCalls: 1,
 		},
 		{

@@ -132,6 +132,10 @@ func (h *DraftsHandler) DraftsCreateHandler(ctx context.Context, request mcp.Cal
 }
 
 // DraftsUpdateHandler replaces the text and destination of an existing draft.
+//
+// The draft is looked up first: every current destination must be allowed by
+// the drafts policy, and a draft that is already scheduled may only target a
+// channel the add-message policy allows, since Slack will send it on schedule.
 func (h *DraftsHandler) DraftsUpdateHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	h.logger.Debug("DraftsUpdateHandler called", zap.Any("params", request.Params))
 
@@ -148,6 +152,18 @@ func (h *DraftsHandler) DraftsUpdateHandler(ctx context.Context, request mcp.Cal
 	channelID, err := h.resolveAllowedChannel(ctx, draftsUpdateTool, policy, channel)
 	if err != nil {
 		return nil, err
+	}
+	existing, err := h.findDraft(ctx, draftID)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkDraftDestinations(draftsUpdateTool, policy, existing); err != nil {
+		return nil, err
+	}
+	if isScheduled(existing) {
+		if err := checkSchedulingAllowed(channelID); err != nil {
+			return nil, err
+		}
 	}
 
 	draft, err := h.slack().DraftsUpdate(ctx, draftID, lastUpdatedTs, draftInputFromRequest(request, channelID, text))
@@ -183,14 +199,8 @@ func (h *DraftsHandler) DraftsDeleteHandler(ctx context.Context, request mcp.Cal
 		if err != nil {
 			return nil, err
 		}
-		if !policyAllowsAll(policy) {
-			channelID := draftChannelID(draft)
-			if channelID == "" {
-				return nil, fmt.Errorf("%s refused: the draft's destination channel is unknown, applied policy: %s", draftsDeleteTool, policy)
-			}
-			if !isChannelAllowedForConfig(channelID, policy) {
-				return nil, channelNotAllowedError(draftsDeleteTool, channelID, policy)
-			}
+		if err := checkDraftDestinations(draftsDeleteTool, policy, draft); err != nil {
+			return nil, err
 		}
 		if lastUpdatedTs == "" {
 			lastUpdatedTs = draft.LastUpdatedTs
@@ -251,11 +261,27 @@ func (h *DraftsHandler) draftRow(draft edge.Draft) DraftRow {
 	return row
 }
 
-func draftChannelID(draft edge.Draft) string {
-	if len(draft.Destinations) == 0 {
-		return ""
+// checkDraftDestinations requires every destination of an existing draft to be
+// allowed by the policy. Under a restricted policy a draft without a known
+// destination is refused.
+func checkDraftDestinations(toolName, policy string, draft edge.Draft) error {
+	if policyAllowsAll(policy) {
+		return nil
 	}
-	return draft.Destinations[0].ChannelID
+	if len(draft.Destinations) == 0 {
+		return fmt.Errorf("%s refused: the draft's destination channel is unknown, applied policy: %s", toolName, policy)
+	}
+	for _, destination := range draft.Destinations {
+		if destination.ChannelID == "" || !isChannelAllowedForConfig(destination.ChannelID, policy) {
+			return channelNotAllowedError(toolName, destination.ChannelID, policy)
+		}
+	}
+	return nil
+}
+
+func isScheduled(draft edge.Draft) bool {
+	scheduled := draft.DateScheduled.String()
+	return scheduled != "" && scheduled != "0"
 }
 
 func draftInputFromRequest(request mcp.CallToolRequest, channelID, text string) edge.DraftInput {

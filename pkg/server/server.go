@@ -622,7 +622,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 		}
 		if shouldAddTool(ToolDraftsUpdate, enabledTools, "SLACK_MCP_DRAFTS_TOOL") {
 			s.AddTool(mcp.NewTool(ToolDraftsUpdate,
-				mcp.WithDescription("Update a draft using the ID and timestamp from drafts_list. The server pads client_last_updated_ts to Slack's required precision. Session authentication (xoxc/xoxd) only."), mcp.WithTitleAnnotation("Update Draft"), mcp.WithDestructiveHintAnnotation(true),
+				mcp.WithDescription("Update a draft using the ID and timestamp from drafts_list. The server pads client_last_updated_ts to Slack's required precision. The draft is looked up first: all its current destinations must be allowed by SLACK_MCP_DRAFTS_TOOL, and an already scheduled draft may only target a channel allowed by SLACK_MCP_ADD_MESSAGE_TOOL. Session authentication (xoxc/xoxd) only."), mcp.WithTitleAnnotation("Update Draft"), mcp.WithDestructiveHintAnnotation(true),
 				mcp.WithString("draft_id", mcp.Required(), mcp.Description("Draft ID from drafts_list.")), mcp.WithString("client_last_updated_ts", mcp.Required(), mcp.Description("LastUpdatedTs from drafts_list.")), mcp.WithString("channel_id", mcp.Required(), mcp.Description("Destination channel ID or #name/@user.")), mcp.WithString("text", mcp.Required(), mcp.Description("Updated draft text.")), mcp.WithString("thread_ts", mcp.Description("Optional parent thread timestamp.")), mcp.WithBoolean("broadcast", mcp.Description("Broadcast a threaded reply when posted.")), mcp.WithString("file_ids", mcp.Description("Comma-separated uploaded file IDs.")),
 			), draftsHandler.DraftsUpdateHandler)
 		}

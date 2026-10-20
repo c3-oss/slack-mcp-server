@@ -259,10 +259,10 @@ List drafts for the authenticated user. Session authentication (`xoxc`/`xoxd`) o
 Create a draft. A scheduled draft is SENT by Slack at its scheduled time, so its channel must be allowed by `SLACK_MCP_ADD_MESSAGE_TOOL` (or `conversations_add_message` must be explicitly enabled).
 
 ### 22. drafts_update
-Update a draft using values from `drafts_list`; the server pads `client_last_updated_ts` to seven decimal places.
+Update a draft using values from `drafts_list`; the server pads `client_last_updated_ts` to seven decimal places. The server looks the draft up first: every current destination must be allowed by `SLACK_MCP_DRAFTS_TOOL`, and an already scheduled draft can only be retargeted to a channel allowed by `SLACK_MCP_ADD_MESSAGE_TOOL`.
 
 ### 23. drafts_delete
-Delete a draft. With an allow-all drafts policy and an explicit timestamp, deletion is direct. Otherwise the server looks it up and refuses when it is missing, its destination is unknown, or its channel is not allowed.
+Delete a draft. With an allow-all drafts policy and an explicit timestamp, deletion is direct. Otherwise the server looks it up and refuses when it is missing, its destination is unknown, or any of its destination channels is not allowed.
 
 All draft tools require session authentication. Write tools use `SLACK_MCP_DRAFTS_TOOL`: `true`, `1`, or `yes` enables all channels; comma-separated values allowlist channels; `!channel` entries form a denylist. When empty, write tools require exact-name listing in `SLACK_MCP_ENABLED_TOOLS`.
 
