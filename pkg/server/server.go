@@ -634,24 +634,24 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 		}
 	}
 
-	// Register saved items tools — "Save for Later" panel management.
+	// Register saved items tools — Saved and To-dos lists.
 	// Requires browser session tokens (xoxc/xoxd); not available for bot or OAuth tokens.
 	if !provider.IsBotToken() && !provider.IsOAuth() && shouldAddTool(ToolSavedList, enabledTools, "") {
 		savedHandler := handler.NewSavedHandler(provider, logger, conversationsHandler)
 		s.AddTool(mcp.NewTool(ToolSavedList,
-			mcp.WithDescription("List saved items from Slack's 'Save for Later' panel. Returns items the user has saved, with optional message content. Replaces the deprecated stars.list API. Requires browser session tokens (xoxc/xoxd)."),
+			mcp.WithDescription("List the authenticated user's Saved items and To-dos. Saved items have no due date. To-dos have a due date. Returns metadata and, by default, the saved message text. An empty view returns the list counts. Requires browser session tokens (xoxc/xoxd)."),
 			mcp.WithTitleAnnotation("List Saved Items"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("filter",
-				mcp.Description("Filter saved items: 'saved' (active/in-progress, default), 'completed' (marked done), 'archived'."),
-				mcp.DefaultString("saved"),
+				mcp.Description("View to list: 'all' (Saved and To-dos, default), 'saved' (Saved, no due date), 'to_do' (To-dos), 'completed', 'archived'."),
+				mcp.DefaultString("all"),
 			),
 			mcp.WithNumber("limit",
 				mcp.Description("Maximum number of items to return. Auto-paginates. Default is 50."),
 				mcp.DefaultNumber(50),
 			),
 			mcp.WithBoolean("include_messages",
-				mcp.Description("If true (default), fetches the actual saved message content. If false, returns metadata only."),
+				mcp.Description("If true (default), fetches the saved message text. Reminder text is included either way. If false, message rows omit the message text."),
 				mcp.DefaultBool(true),
 			),
 			mcp.WithNumber("max_messages_per_item",
@@ -662,7 +662,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 
 		if shouldAddTool(ToolSavedUpdate, enabledTools, "") {
 			s.AddTool(mcp.NewTool(ToolSavedUpdate,
-				mcp.WithDescription("Update a saved item: mark as completed, set a due date, or both. Use item_id and ts values from saved_list output. Replaces the deprecated stars.add/stars.remove APIs."),
+				mcp.WithDescription("Update a Saved item or To-do: mark it completed, set a due date, or both. A due date places the item in To-dos. Use item_id and ts from saved_list. Requires browser session tokens (xoxc/xoxd)."),
 				mcp.WithTitleAnnotation("Update Saved Item"),
 				mcp.WithDestructiveHintAnnotation(true),
 				mcp.WithString("item_id",
@@ -684,7 +684,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 
 		if shouldAddTool(ToolSavedClearCompleted, enabledTools, "") {
 			s.AddTool(mcp.NewTool(ToolSavedClearCompleted,
-				mcp.WithDescription("Clear all completed saved items from the 'Save for Later' panel. This is a bulk operation that removes all items with state='completed'."),
+				mcp.WithDescription("Clear every completed To-do. This removes all items with state='completed'."),
 				mcp.WithTitleAnnotation("Clear Completed Saved Items"),
 				mcp.WithDestructiveHintAnnotation(true),
 			), savedHandler.SavedClearCompletedHandler)

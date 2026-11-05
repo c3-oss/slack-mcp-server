@@ -5,14 +5,14 @@ import (
 	"runtime/trace"
 )
 
-// saved.* API — internal Slack APIs for "Save for Later" panel.
+// saved.* API — internal Slack APIs for the Saved and To-dos lists.
 // These replaced the deprecated stars.* API (March 2023).
 // Only accessible with browser session tokens (xoxc/xoxd).
 
 type savedListForm struct {
 	BaseRequest
 	Limit             int    `json:"limit"`
-	Filter            string `json:"filter"`
+	Filter            string `json:"filter,omitempty"`
 	Cursor            string `json:"cursor,omitempty"`
 	IncludeTombstones bool   `json:"include_tombstones"`
 	WebClientFields
@@ -27,6 +27,8 @@ type SavedListResponse struct {
 type SavedItem struct {
 	ItemID           string `json:"item_id"`
 	ItemType         string `json:"item_type"`
+	ItemDetail       string `json:"item_detail"`
+	Description      string `json:"description"`
 	DateCreated      int64  `json:"date_created"`
 	DateDue          int64  `json:"date_due"`
 	DateCompleted    int64  `json:"date_completed"`
@@ -35,6 +37,8 @@ type SavedItem struct {
 	DateSnoozedUntil int64  `json:"date_snoozed_until"`
 	Ts               string `json:"ts"`
 	State            string `json:"state"`
+	// TodoState is the tab: "saved" (no due date), "to_do", or "completed".
+	TodoState string `json:"todo_state"`
 }
 
 type SavedCounts struct {
@@ -43,6 +47,9 @@ type SavedCounts struct {
 	ArchivedCount           int `json:"archived_count"`
 	CompletedCount          int `json:"completed_count"`
 	TotalCount              int `json:"total_count"`
+	SavedNoDueDateCount     int `json:"saved_no_due_date_count"`
+	TodoCount               int `json:"todo_count"`
+	TodoUnfilteredCount     int `json:"todo_unfiltered_count"`
 }
 
 func (cl *Client) SavedList(ctx context.Context, filter string, limit int, cursor string) (SavedListResponse, error) {
