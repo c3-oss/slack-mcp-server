@@ -27,11 +27,13 @@ func TestUnitDraftsPadTs(t *testing.T) {
 
 func TestUnitDraftsResponseAcceptsNumericDates(t *testing.T) {
 	var response DraftsListResponse
-	err := json.Unmarshal([]byte(`{"ok":true,"drafts":[{"id":"D1","last_updated_ts":"1700000000.1234567","date_created":1700000000,"date_scheduled":1700000100,"destinations":[{"channel_id":"C1"},{"channel_id":"C2","thread_ts":"1.2","broadcast":true}]}]}`), &response)
+	err := json.Unmarshal([]byte(`{"ok":true,"has_more":true,"response_metadata":{"next_cursor":"cur"},"drafts":[{"id":"D1","last_updated_ts":"1700000000.1234567","date_created":1700000000,"date_scheduled":1700000100,"destinations":[{"channel_id":"C1"},{"channel_id":"C2","thread_ts":"1.2","broadcast":true}]}]}`), &response)
 	require.NoError(t, err)
 	require.Equal(t, "1700000000", response.Drafts[0].DateCreated.String())
 	require.Len(t, response.Drafts[0].Destinations, 2)
 	require.Empty(t, response.Drafts[0].Destinations[0].ThreadTS)
+	require.True(t, response.HasMore)
+	require.Equal(t, "cur", response.ResponseMetadata.NextCursor)
 }
 
 func newDraftClient(t *testing.T, response string, capture *capturedDraftRequest) *Client {
@@ -106,12 +108,30 @@ func TestUnitDraftsUpdateAndList(t *testing.T) {
 	var listed capturedDraftRequest
 	client = newDraftClient(t, `{"ok":true,"drafts":[{"id":"D1","date_created":1700}]}`, &listed)
 	active := false
-	result, err := client.DraftsList(context.Background(), &active, 25)
+	result, err := client.DraftsList(context.Background(), &active, 25, "")
 	require.NoError(t, err)
 	require.Len(t, result.Drafts, 1)
 	require.Equal(t, "/api/drafts.list", listed.path)
 	require.Equal(t, "false", mustJSONField(t, listed.body, "is_active"))
 	require.Equal(t, "25", mustJSONField(t, listed.body, "limit"))
+	require.NotContains(t, string(listed.body), "cursor")
+}
+
+func TestUnitDraftsListCursor(t *testing.T) {
+	var captured capturedDraftRequest
+	client := newDraftClient(t, `{"ok":true,"drafts":[]}`, &captured)
+	_, err := client.DraftsList(context.Background(), nil, 0, "")
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(captured.body))
+
+	active := true
+	_, err = client.DraftsList(context.Background(), &active, 0, "cur-1")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"cursor":"cur-1","is_active":"true"}`, string(captured.body))
+
+	_, err = client.DraftsList(context.Background(), nil, 4, "cur-2")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"cursor":"cur-2","limit":"4"}`, string(captured.body))
 }
 
 func mustJSONField(t *testing.T, data []byte, key string) string {

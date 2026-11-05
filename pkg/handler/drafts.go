@@ -28,6 +28,8 @@ const (
 	// draftLookupLimit is the page size for update/delete lookups.
 	// A zero limit is omitted on the wire, so Slack's default page would hide later drafts.
 	draftLookupLimit = 1000
+
+	draftListTruncated = "draft_list_truncated"
 )
 
 // DraftRow is the CSV representation returned by the draft tools.
@@ -47,7 +49,7 @@ type DraftRow struct {
 
 // draftsAPI is the subset of the Slack client used by the draft tools.
 type draftsAPI interface {
-	DraftsList(ctx context.Context, isActive *bool, limit int) (edge.DraftsListResponse, error)
+	DraftsList(ctx context.Context, isActive *bool, limit int, cursor string) (edge.DraftsListResponse, error)
 	DraftsCreate(ctx context.Context, input edge.DraftInput) (edge.Draft, error)
 	DraftsUpdate(ctx context.Context, draftID, clientLastUpdatedTs string, input edge.DraftInput) (edge.Draft, error)
 	DraftsDelete(ctx context.Context, draftID, clientLastUpdatedTs string) error
@@ -89,17 +91,29 @@ func (h *DraftsHandler) DraftsListHandler(ctx context.Context, request mcp.CallT
 		isActive = &value
 	}
 
-	response, err := h.slack().DraftsList(ctx, isActive, request.GetInt("limit", 0))
+	drafts, truncated, err := h.listDrafts(ctx, isActive, request.GetInt("limit", 0))
 	if err != nil {
 		h.logger.Error("DraftsList failed", zap.Error(err))
 		return nil, fmt.Errorf("failed to list drafts: %w", err)
 	}
 
-	rows := make([]DraftRow, 0, len(response.Drafts))
-	for _, draft := range response.Drafts {
+	rows := make([]DraftRow, 0, len(drafts))
+	for _, draft := range drafts {
 		rows = append(rows, h.draftRows(draft)...)
 	}
-	return marshalDraftRows(rows)
+	result, err := marshalDraftRows(rows)
+	if err != nil || !truncated {
+		return result, err
+	}
+	text, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		return result, nil
+	}
+	body := text.Text
+	if !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	return mcp.NewToolResultText(body + draftListTruncated + "\n"), nil
 }
 
 // DraftsCreateHandler creates a draft addressed to a channel or thread.
@@ -218,21 +232,90 @@ func (h *DraftsHandler) DraftsDeleteHandler(ctx context.Context, request mcp.Cal
 	return mcp.NewToolResultText("draft deleted"), nil
 }
 
+// listDrafts follows drafts.list cursors. limit is the maximum number of drafts
+// to return; zero means no maximum. A page is requested with the remaining
+// maximum, or with no limit when there is no maximum. truncated is set only
+// when that maximum was not reached and the last page has has_more without a
+// new cursor.
+func (h *DraftsHandler) listDrafts(ctx context.Context, isActive *bool, limit int) ([]edge.Draft, bool, error) {
+	var drafts []edge.Draft
+	capped := false
+	_, exhaustedMore, err := h.walkDraftPages(ctx, isActive, func(collected int) int {
+		if limit > 0 {
+			return limit - collected
+		}
+		return 0
+	}, func(response edge.DraftsListResponse) bool {
+		drafts = append(drafts, response.Drafts...)
+		if limit > 0 && len(drafts) >= limit {
+			drafts = drafts[:limit]
+			capped = true
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return drafts, exhaustedMore && !capped, nil
+}
+
 func (h *DraftsHandler) findDraft(ctx context.Context, draftID string) (edge.Draft, error) {
-	response, err := h.slack().DraftsList(ctx, nil, draftLookupLimit)
+	var (
+		found edge.Draft
+		ok    bool
+	)
+	repeated, exhaustedMore, err := h.walkDraftPages(ctx, nil, func(int) int { return draftLookupLimit }, func(response edge.DraftsListResponse) bool {
+		for _, draft := range response.Drafts {
+			if draft.ID == draftID && draft.LastUpdatedTs != "" {
+				found = draft
+				ok = true
+				return false
+			}
+		}
+		return true
+	})
 	if err != nil {
 		h.logger.Error("DraftsList failed", zap.Error(err))
 		return edge.Draft{}, fmt.Errorf("failed to look up draft: %w", err)
 	}
-	for _, draft := range response.Drafts {
-		if draft.ID == draftID && draft.LastUpdatedTs != "" {
-			return draft, nil
-		}
+	if ok {
+		return found, nil
 	}
-	if response.HasMore {
-		return edge.Draft{}, errors.New("draft_list_truncated")
+	if repeated || exhaustedMore {
+		return edge.Draft{}, errors.New(draftListTruncated)
 	}
 	return edge.Draft{}, errors.New("draft_not_found")
+}
+
+// walkDraftPages requests drafts.list and follows response_metadata.next_cursor
+// until the cursor is empty, a cursor repeats, or visit returns false.
+// limitFor receives how many drafts earlier pages returned. repeated means the
+// next cursor was already requested. exhaustedMore means the last page set
+// has_more and returned no cursor.
+func (h *DraftsHandler) walkDraftPages(ctx context.Context, isActive *bool, limitFor func(collected int) int, visit func(edge.DraftsListResponse) bool) (repeated, exhaustedMore bool, err error) {
+	seen := map[string]struct{}{}
+	cursor := ""
+	collected := 0
+	for {
+		if _, dup := seen[cursor]; dup {
+			return true, false, nil
+		}
+		seen[cursor] = struct{}{}
+		response, err := h.slack().DraftsList(ctx, isActive, limitFor(collected), cursor)
+		if err != nil {
+			return false, false, err
+		}
+		if !visit(response) {
+			return false, false, nil
+		}
+		collected += len(response.Drafts)
+		next := response.ResponseMetadata.NextCursor
+		if next == "" {
+			return false, response.HasMore, nil
+		}
+		cursor = next
+	}
 }
 
 // resolveAllowedChannel resolves #channel / @user references to an ID and

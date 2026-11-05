@@ -265,11 +265,13 @@ Clear all completed saved items from the "Save for Later" panel. This is a bulk 
 ### 20. drafts_list
 List the authenticated user's unsent message drafts. Returns CSV with columns `DraftID`, `ChannelID`, `ChannelName`, `ThreadTs`, `Broadcast`, `Text`, `FileIDs`, `LastUpdatedTs`, `DateScheduled`, `DateCreated`, `IsSent`. Each destination is its own row, and the draft-level columns are repeated on every destination row. A draft with no destinations produces one row with empty `ChannelID`, `ChannelName`, and `ThreadTs` and `Broadcast` false. Use `DraftID` and `LastUpdatedTs` for `drafts_update` and `drafts_delete`.
 
+`limit` is the maximum number of drafts to return. Later pages are requested until that maximum is reached, Slack returns no further cursor, or a cursor repeats. Omitting `limit` still requests later pages, with no client maximum. A trailing line `draft_list_truncated` means Slack reported more drafts without a cursor.
+
 > **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens.
 
 - **Parameters:**
   - `is_active` (boolean, optional): Only return active (unsent) drafts.
-  - `limit` (number, optional): Maximum number of drafts to return.
+  - `limit` (number, optional): Maximum number of drafts to return. Later pages are requested until the maximum is reached. Omit it for no maximum.
 
 ### 21. drafts_create
 Create a draft addressed to a channel, DM, or thread. The draft appears in the conversation composer for the user to review and send. Returns the created draft as a CSV row.

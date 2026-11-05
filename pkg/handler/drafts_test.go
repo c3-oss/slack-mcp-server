@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/c3-oss/slack-mcp-server/pkg/provider/edge"
@@ -15,11 +16,14 @@ import (
 
 type fakeDraftsAPI struct {
 	listResponse edge.DraftsListResponse
+	listByCursor map[string]edge.DraftsListResponse
 	err          error
 
 	listCalls   int
 	listActive  *bool
 	listLimit   int
+	listLimits  []int
+	listCursors []string
 	createCalls []edge.DraftInput
 	updateCalls []fakeDraftUpdate
 	deleteCalls []fakeDraftDelete
@@ -34,10 +38,21 @@ type fakeDraftDelete struct {
 	draftID, timestamp string
 }
 
-func (f *fakeDraftsAPI) DraftsList(_ context.Context, isActive *bool, limit int) (edge.DraftsListResponse, error) {
+func (f *fakeDraftsAPI) DraftsList(_ context.Context, isActive *bool, limit int, cursor string) (edge.DraftsListResponse, error) {
 	f.listCalls++
 	f.listActive, f.listLimit = isActive, limit
+	f.listLimits = append(f.listLimits, limit)
+	f.listCursors = append(f.listCursors, cursor)
+	if f.listByCursor != nil {
+		return f.listByCursor[cursor], f.err
+	}
 	return f.listResponse, f.err
+}
+
+func draftListPage(drafts []edge.Draft, hasMore bool, nextCursor string) edge.DraftsListResponse {
+	response := edge.DraftsListResponse{Drafts: drafts, HasMore: hasMore}
+	response.ResponseMetadata.NextCursor = nextCursor
+	return response
 }
 
 func (f *fakeDraftsAPI) DraftsCreate(_ context.Context, input edge.DraftInput) (edge.Draft, error) {
@@ -165,6 +180,85 @@ func TestUnitDraftsListHandler(t *testing.T) {
 		failing := newTestDraftsHandler(&fakeDraftsAPI{err: errors.New("invalid_auth")})
 		_, err := failing.DraftsListHandler(context.Background(), draftsRequest(map[string]any{}))
 		assert.ErrorContains(t, err, "invalid_auth")
+	})
+}
+
+func TestUnitDraftsListPagination(t *testing.T) {
+	clearDraftsEnv(t)
+	draft := func(id string) edge.Draft {
+		return edge.Draft{ID: id, Destinations: []edge.DraftDestination{{ChannelID: "C9"}}}
+	}
+	assertTruncatedLine := func(t *testing.T, text string) {
+		t.Helper()
+		assert.True(t, strings.HasSuffix(text, "\n"+draftListTruncated+"\n"), text)
+		assert.NotContains(t, strings.TrimSuffix(text, draftListTruncated+"\n"), draftListTruncated)
+	}
+
+	t.Run("follows next_cursor and requests the remaining limit", func(t *testing.T) {
+		api := &fakeDraftsAPI{listByCursor: map[string]edge.DraftsListResponse{
+			"":   draftListPage([]edge.Draft{draft("Dr1"), draft("Dr2")}, true, "c2"),
+			"c2": draftListPage([]edge.Draft{draft("Dr3"), draft("Dr4")}, true, "c3"),
+		}}
+		result, err := newTestDraftsHandler(api).DraftsListHandler(context.Background(), draftsRequest(map[string]any{"is_active": false, "limit": float64(3)}))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"", "c2"}, api.listCursors)
+		assert.Equal(t, []int{3, 1}, api.listLimits)
+		require.NotNil(t, api.listActive)
+		assert.False(t, *api.listActive)
+		text := resultText(t, result)
+		assert.Contains(t, text, "Dr1,")
+		assert.Contains(t, text, "Dr2,")
+		assert.Contains(t, text, "Dr3,")
+		assert.NotContains(t, text, "Dr4,")
+		assert.NotContains(t, text, draftListTruncated)
+	})
+
+	t.Run("requests a second page when no maximum is set", func(t *testing.T) {
+		api := &fakeDraftsAPI{listByCursor: map[string]edge.DraftsListResponse{
+			"":   draftListPage([]edge.Draft{draft("Dr1")}, true, "c2"),
+			"c2": draftListPage([]edge.Draft{draft("Dr2")}, false, ""),
+		}}
+		result, err := newTestDraftsHandler(api).DraftsListHandler(context.Background(), draftsRequest(map[string]any{}))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"", "c2"}, api.listCursors)
+		assert.Equal(t, []int{0, 0}, api.listLimits)
+		text := resultText(t, result)
+		assert.Contains(t, text, "Dr1,")
+		assert.Contains(t, text, "Dr2,")
+		assert.NotContains(t, text, draftListTruncated)
+	})
+
+	t.Run("appends draft_list_truncated when has_more has no cursor", func(t *testing.T) {
+		api := &fakeDraftsAPI{listResponse: draftListPage([]edge.Draft{draft("Dr1")}, true, "")}
+		result, err := newTestDraftsHandler(api).DraftsListHandler(context.Background(), draftsRequest(map[string]any{"limit": float64(5)}))
+		require.NoError(t, err)
+		assert.Equal(t, []int{5}, api.listLimits)
+		assert.Equal(t, []string{""}, api.listCursors)
+		text := resultText(t, result)
+		assert.Contains(t, text, "Dr1,")
+		assertTruncatedLine(t, text)
+	})
+
+	t.Run("does not mark truncation once the requested maximum is reached", func(t *testing.T) {
+		api := &fakeDraftsAPI{listResponse: draftListPage([]edge.Draft{draft("Dr1")}, true, "")}
+		result, err := newTestDraftsHandler(api).DraftsListHandler(context.Background(), draftsRequest(map[string]any{"limit": float64(1)}))
+		require.NoError(t, err)
+		assert.Equal(t, 1, api.listCalls)
+		assert.NotContains(t, resultText(t, result), draftListTruncated)
+	})
+
+	t.Run("stops when a cursor repeats without a truncation line", func(t *testing.T) {
+		api := &fakeDraftsAPI{listByCursor: map[string]edge.DraftsListResponse{
+			"":   draftListPage([]edge.Draft{draft("Dr1")}, true, "c2"),
+			"c2": draftListPage([]edge.Draft{draft("Dr2")}, true, "c2"),
+		}}
+		result, err := newTestDraftsHandler(api).DraftsListHandler(context.Background(), draftsRequest(map[string]any{}))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"", "c2"}, api.listCursors)
+		text := resultText(t, result)
+		assert.Contains(t, text, "Dr1,")
+		assert.Contains(t, text, "Dr2,")
+		assert.NotContains(t, text, draftListTruncated)
 	})
 }
 
@@ -417,8 +511,10 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 		env           map[string]string
 		args          map[string]any
 		listResponse  *edge.DraftsListResponse
+		listByCursor  map[string]edge.DraftsListResponse
 		errContains   string
 		wantListCalls int
+		wantCursors   []string
 		wantDelete    []fakeDraftDelete
 	}{
 		{
@@ -470,7 +566,7 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 			wantListCalls: 1,
 		},
 		{
-			name: "lookup stops when slack reports another page",
+			name: "lookup stops when slack reports more drafts without a cursor",
 			env:  map[string]string{"SLACK_MCP_DRAFTS_TOOL": "true"},
 			args: map[string]any{"draft_id": "missing"},
 			listResponse: &edge.DraftsListResponse{
@@ -479,6 +575,54 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 			},
 			errContains:   "draft_list_truncated",
 			wantListCalls: 1,
+		},
+		{
+			name: "lookup finds a draft on a later page",
+			env:  map[string]string{"SLACK_MCP_DRAFTS_TOOL": "true"},
+			args: map[string]any{"draft_id": "Dr9"},
+			listByCursor: map[string]edge.DraftsListResponse{
+				"": draftListPage([]edge.Draft{{
+					ID: "Dr1", LastUpdatedTs: "1", Destinations: []edge.DraftDestination{{ChannelID: "C1"}},
+				}}, true, "c2"),
+				"c2": draftListPage([]edge.Draft{{
+					ID: "Dr9", LastUpdatedTs: "1700000000.9", Destinations: []edge.DraftDestination{{ChannelID: "C1"}},
+				}}, false, ""),
+			},
+			wantListCalls: 2,
+			wantCursors:   []string{"", "c2"},
+			wantDelete:    []fakeDraftDelete{{draftID: "Dr9", timestamp: "1700000000.9"}},
+		},
+		{
+			name: "lookup stops when a cursor repeats",
+			env:  map[string]string{"SLACK_MCP_DRAFTS_TOOL": "true"},
+			args: map[string]any{"draft_id": "missing"},
+			listByCursor: map[string]edge.DraftsListResponse{
+				"": draftListPage([]edge.Draft{{
+					ID: "Dr1", LastUpdatedTs: "1",
+				}}, true, "c2"),
+				"c2": draftListPage([]edge.Draft{{
+					ID: "Dr1", LastUpdatedTs: "1",
+				}}, true, "c2"),
+			},
+			errContains:   "draft_list_truncated",
+			wantListCalls: 2,
+			wantCursors:   []string{"", "c2"},
+		},
+		{
+			name: "lookup returns not found after the last page",
+			env:  map[string]string{"SLACK_MCP_DRAFTS_TOOL": "true"},
+			args: map[string]any{"draft_id": "missing"},
+			listByCursor: map[string]edge.DraftsListResponse{
+				"": draftListPage([]edge.Draft{{
+					ID: "Dr1", LastUpdatedTs: "1", Destinations: []edge.DraftDestination{{ChannelID: "C1"}},
+				}}, true, "c2"),
+				"c2": draftListPage([]edge.Draft{{
+					ID: "Dr8", LastUpdatedTs: "2", Destinations: []edge.DraftDestination{{ChannelID: "C1"}},
+				}}, false, ""),
+			},
+			errContains:   "draft_not_found",
+			wantListCalls: 2,
+			wantCursors:   []string{"", "c2"},
 		},
 		{
 			name:        "disabled by default",
@@ -503,7 +647,7 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 			if tc.listResponse != nil {
 				response = *tc.listResponse
 			}
-			api := &fakeDraftsAPI{listResponse: response}
+			api := &fakeDraftsAPI{listResponse: response, listByCursor: tc.listByCursor}
 			result, err := newTestDraftsHandler(api).DraftsDeleteHandler(context.Background(), draftsRequest(tc.args))
 			if tc.errContains != "" {
 				assert.ErrorContains(t, err, tc.errContains)
@@ -514,6 +658,14 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 			assert.Equal(t, tc.wantListCalls, api.listCalls)
 			if tc.wantListCalls > 0 {
 				assert.Equal(t, draftLookupLimit, api.listLimit)
+				for _, limit := range api.listLimits {
+					assert.Equal(t, draftLookupLimit, limit)
+				}
+			}
+			if tc.wantCursors != nil {
+				assert.Equal(t, tc.wantCursors, api.listCursors)
+			} else if tc.wantListCalls > 0 {
+				assert.Equal(t, []string{""}, api.listCursors)
 			}
 			assert.Equal(t, tc.wantDelete, api.deleteCalls)
 		})

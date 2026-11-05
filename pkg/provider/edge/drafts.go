@@ -165,13 +165,16 @@ func (cl *Client) PostJSONWebclient(ctx context.Context, method string, body any
 	return do(ctx, cl.cl, r)
 }
 
-func (cl *Client) DraftsList(ctx context.Context, isActive *bool, limit int) (DraftsListResponse, error) {
+func (cl *Client) DraftsList(ctx context.Context, isActive *bool, limit int, cursor string) (DraftsListResponse, error) {
 	body := map[string]any{}
 	if isActive != nil {
 		body["is_active"] = fmt.Sprintf("%t", *isActive)
 	}
 	if limit != 0 {
 		body["limit"] = fmt.Sprintf("%d", limit)
+	}
+	if cursor != "" {
+		body["cursor"] = cursor
 	}
 	resp, err := cl.PostJSONWebclient(ctx, "drafts.list", body)
 	if err != nil {
