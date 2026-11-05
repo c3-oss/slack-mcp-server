@@ -606,10 +606,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 		draftsHandler := handler.NewDraftsHandler(provider, logger, conversationsHandler)
 		if shouldAddTool(ToolDraftsList, enabledTools, "") {
 			s.AddTool(mcp.NewTool(ToolDraftsList,
-				mcp.WithDescription("List Slack drafts. This requires session authentication (xoxc/xoxd). Use the DraftID, timestamps, and destination channel IDs returned here for update/delete."),
+				mcp.WithDescription("List Slack drafts. Each destination is its own CSV row. limit is the maximum number of drafts returned; later pages are requested until that maximum is reached or Slack provides no further cursor. A trailing draft_list_truncated line means Slack reported more drafts without a cursor. This requires session authentication (xoxc/xoxd). Use the DraftID, timestamps, and destination channel IDs returned here for update/delete."),
 				mcp.WithTitleAnnotation("List Drafts"), mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithBoolean("is_active", mcp.Description("Only return active (unsent) drafts.")),
-				mcp.WithNumber("limit", mcp.Description("Maximum drafts to return.")),
+				mcp.WithNumber("limit", mcp.Description("Maximum number of drafts to return. Later pages are requested until the maximum is reached. Zero or omitted means no maximum.")),
 			), draftsHandler.DraftsListHandler)
 		}
 		if shouldAddTool(ToolDraftsCreate, enabledTools, "SLACK_MCP_DRAFTS_TOOL") {

@@ -254,7 +254,7 @@ type SlackAPI interface {
 	SavedList(ctx context.Context, filter string, limit int, cursor string) (edge.SavedListResponse, error)
 	SavedUpdate(ctx context.Context, itemType, itemID, ts, mark string, dateDue int64) error
 	SavedClearCompleted(ctx context.Context) error
-	DraftsList(ctx context.Context, isActive *bool, limit int) (edge.DraftsListResponse, error)
+	DraftsList(ctx context.Context, isActive *bool, limit int, cursor string) (edge.DraftsListResponse, error)
 	DraftsCreate(ctx context.Context, input edge.DraftInput) (edge.Draft, error)
 	DraftsUpdate(ctx context.Context, draftID, clientLastUpdatedTs string, input edge.DraftInput) (edge.Draft, error)
 	DraftsDelete(ctx context.Context, draftID, clientLastUpdatedTs string) error
@@ -612,8 +612,8 @@ func (c *MCPSlackClient) SavedClearCompleted(ctx context.Context) error {
 	return c.edgeClient.SavedClearCompleted(ctx)
 }
 
-func (c *MCPSlackClient) DraftsList(ctx context.Context, isActive *bool, limit int) (edge.DraftsListResponse, error) {
-	return c.edgeClient.DraftsList(ctx, isActive, limit)
+func (c *MCPSlackClient) DraftsList(ctx context.Context, isActive *bool, limit int, cursor string) (edge.DraftsListResponse, error) {
+	return c.edgeClient.DraftsList(ctx, isActive, limit, cursor)
 }
 func (c *MCPSlackClient) DraftsCreate(ctx context.Context, input edge.DraftInput) (edge.Draft, error) {
 	return c.edgeClient.DraftsCreate(ctx, input)
