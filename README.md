@@ -30,6 +30,7 @@ Releases after that tag are published by c3-oss. The Go module is `github.com/c3
 - **v1.4.1:** Go modules are current, including patches for transitive CVEs.
 - **v1.5.0:** `conversations_forward_message` forwards a message through Slack `chat.shareMessage`. It requires `xoxc`/`xoxd` authentication and stays off unless `SLACK_MCP_FORWARD_MESSAGE_TOOL` allows the destination.
 - **v1.6.0:** `drafts_list`, `drafts_create`, `drafts_update`, and `drafts_delete` require `xoxc`/`xoxd` authentication. Write tools stay off unless `SLACK_MCP_DRAFTS_TOOL` allows the channel. A `date_scheduled` draft is sent by Slack, and that destination must also be allowed by the same rule as `conversations_add_message` (`SLACK_MCP_ADD_MESSAGE_TOOL`).
+- **v1.7.0:** `saved_list` lists Saved and To-dos. `drafts_list` returns one row per destination, nested rich text, and later pages. Go modules include the `golang.org/x/net` fix, and the container image builds with Go 1.26.
 
 ### Analytics Demo
 
