@@ -606,7 +606,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 		draftsHandler := handler.NewDraftsHandler(provider, logger, conversationsHandler)
 		if shouldAddTool(ToolDraftsList, enabledTools, "") {
 			s.AddTool(mcp.NewTool(ToolDraftsList,
-				mcp.WithDescription("List Slack drafts. This requires session authentication (xoxc/xoxd). Use the DraftID, timestamps, and destination channel IDs returned here for update/delete."),
+				mcp.WithDescription("List Slack drafts. Each destination is its own CSV row. This requires session authentication (xoxc/xoxd). Use the DraftID, timestamps, and destination channel IDs returned here for update/delete."),
 				mcp.WithTitleAnnotation("List Drafts"), mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithBoolean("is_active", mcp.Description("Only return active (unsent) drafts.")),
 				mcp.WithNumber("limit", mcp.Description("Maximum drafts to return.")),

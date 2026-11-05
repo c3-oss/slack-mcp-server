@@ -102,6 +102,15 @@ func clearDraftsEnv(t *testing.T) {
 func TestUnitDraftTextExtractsRichText(t *testing.T) {
 	var raw json.RawMessage = []byte(`[ {"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}]} ]`)
 	assert.Equal(t, "hello world", draftText(raw))
+
+	bullet := json.RawMessage(`[{"type":"rich_text","elements":[{"type":"rich_text_list","style":"bullet","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"bullet"}]}]}]}]`)
+	assert.Equal(t, "bullet", draftText(bullet))
+
+	linkText := json.RawMessage(`[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"link","url":"https://example.com","text":"Example"}]}]}]`)
+	assert.Equal(t, "Example", draftText(linkText))
+
+	linkURL := json.RawMessage(`[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"link","url":"https://example.com/only"}]}]}]`)
+	assert.Equal(t, "https://example.com/only", draftText(linkURL))
 }
 
 func TestUnitDraftTextToleratesUnexpectedBlocks(t *testing.T) {
@@ -116,13 +125,17 @@ func TestUnitDraftsListHandler(t *testing.T) {
 		{
 			ID:            "Dr1",
 			LastUpdatedTs: "1700000000.1234567",
-			Destinations:  []edge.DraftDestination{{ChannelID: "C1", ThreadTS: "1.2", Broadcast: true}},
+			Destinations: []edge.DraftDestination{
+				{ChannelID: "C1", ThreadTS: "1.2", Broadcast: true},
+				{ChannelID: "C2", ThreadTS: "3.4"},
+			},
 			Blocks:        json.RawMessage(`[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"hi"}]}]}]`),
 			FileIDs:       []string{"F1", "F2"},
 			DateScheduled: "1700000100",
 			DateCreated:   "1700000000",
 		},
 		{ID: "Dr2", Destinations: []edge.DraftDestination{{ChannelID: "C9"}}},
+		{ID: "Dr3"},
 	}}}
 	handler := newTestDraftsHandler(api)
 
@@ -135,7 +148,9 @@ func TestUnitDraftsListHandler(t *testing.T) {
 		assert.Equal(t,
 			"DraftID,ChannelID,ChannelName,ThreadTs,Broadcast,Text,FileIDs,LastUpdatedTs,DateScheduled,DateCreated,IsSent\n"+
 				"Dr1,C1,#general,1.2,true,hi,\"F1,F2\",1700000000.1234567,1700000100,1700000000,false\n"+
-				"Dr2,C9,C9,,false,,,,,,false\n",
+				"Dr1,C2,C2,3.4,false,hi,\"F1,F2\",1700000000.1234567,1700000100,1700000000,false\n"+
+				"Dr2,C9,C9,,false,,,,,,false\n"+
+				"Dr3,,,,false,,,,,,false\n",
 			resultText(t, result))
 	})
 

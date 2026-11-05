@@ -263,7 +263,7 @@ Clear all completed saved items from the "Save for Later" panel. This is a bulk 
 - **Parameters:** None.
 
 ### 20. drafts_list
-List the authenticated user's unsent message drafts. Returns CSV with columns `DraftID`, `ChannelID`, `ChannelName`, `ThreadTs`, `Broadcast`, `Text`, `FileIDs`, `LastUpdatedTs`, `DateScheduled`, `DateCreated`, `IsSent`. Use `DraftID` and `LastUpdatedTs` for `drafts_update` and `drafts_delete`.
+List the authenticated user's unsent message drafts. Returns CSV with columns `DraftID`, `ChannelID`, `ChannelName`, `ThreadTs`, `Broadcast`, `Text`, `FileIDs`, `LastUpdatedTs`, `DateScheduled`, `DateCreated`, `IsSent`. Each destination is its own row, and the draft-level columns are repeated on every destination row. A draft with no destinations produces one row with empty `ChannelID`, `ChannelName`, and `ThreadTs` and `Broadcast` false. Use `DraftID` and `LastUpdatedTs` for `drafts_update` and `drafts_delete`.
 
 > **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens.
 

@@ -97,7 +97,7 @@ func (h *DraftsHandler) DraftsListHandler(ctx context.Context, request mcp.CallT
 
 	rows := make([]DraftRow, 0, len(response.Drafts))
 	for _, draft := range response.Drafts {
-		rows = append(rows, h.draftRow(draft))
+		rows = append(rows, h.draftRows(draft)...)
 	}
 	return marshalDraftRows(rows)
 }
@@ -132,7 +132,7 @@ func (h *DraftsHandler) DraftsCreateHandler(ctx context.Context, request mcp.Cal
 		h.logger.Error("DraftsCreate failed", zap.Error(err))
 		return nil, fmt.Errorf("failed to create draft: %w", err)
 	}
-	return marshalDraftRows([]DraftRow{h.draftRow(draft)})
+	return marshalDraftRows(h.draftRows(draft))
 }
 
 // DraftsUpdateHandler replaces the text and destination of an existing draft.
@@ -175,7 +175,7 @@ func (h *DraftsHandler) DraftsUpdateHandler(ctx context.Context, request mcp.Cal
 		h.logger.Error("DraftsUpdate failed", zap.Error(err))
 		return nil, fmt.Errorf("failed to update draft: %w", err)
 	}
-	return marshalDraftRows([]DraftRow{h.draftRow(draft)})
+	return marshalDraftRows(h.draftRows(draft))
 }
 
 // DraftsDeleteHandler deletes a draft.
@@ -248,8 +248,11 @@ func (h *DraftsHandler) resolveAllowedChannel(ctx context.Context, toolName, pol
 	return channelID, nil
 }
 
-func (h *DraftsHandler) draftRow(draft edge.Draft) DraftRow {
-	row := DraftRow{
+// draftRows returns one CSV row per destination. Draft-level columns are
+// repeated on every row. A draft with no destinations is a single row with
+// empty channel fields.
+func (h *DraftsHandler) draftRows(draft edge.Draft) []DraftRow {
+	base := DraftRow{
 		DraftID:       draft.ID,
 		Text:          draftText(draft.Blocks),
 		FileIDs:       strings.Join(draft.FileIDs, ","),
@@ -258,14 +261,19 @@ func (h *DraftsHandler) draftRow(draft edge.Draft) DraftRow {
 		DateCreated:   draft.DateCreated.String(),
 		IsSent:        draft.IsSent,
 	}
-	if len(draft.Destinations) > 0 {
-		destination := draft.Destinations[0]
+	if len(draft.Destinations) == 0 {
+		return []DraftRow{base}
+	}
+	rows := make([]DraftRow, 0, len(draft.Destinations))
+	for _, destination := range draft.Destinations {
+		row := base
 		row.ChannelID = destination.ChannelID
 		row.ChannelName = h.channelName(destination.ChannelID)
 		row.ThreadTs = destination.ThreadTS
 		row.Broadcast = destination.Broadcast
+		rows = append(rows, row)
 	}
-	return row
+	return rows
 }
 
 // checkDraftDestinations requires every destination of an existing draft to be
@@ -307,31 +315,45 @@ func draftInputFromRequest(request mcp.CallToolRequest, channelID, text string) 
 	}
 }
 
-// draftText extracts the plain text of rich_text blocks, ignoring any element
-// it does not understand.
+// richTextNode is one rich-text element. Elements nests further rich-text nodes.
+type richTextNode struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text"`
+	URL      string          `json:"url"`
+	Elements json.RawMessage `json:"elements"`
+}
+
+// draftText extracts plain text from rich-text blocks. Text leaves contribute
+// their text, links contribute their text or otherwise their URL, and unknown
+// leaves are skipped. Nesting, including rich_text_list sections, is walked
+// in full.
 func draftText(raw json.RawMessage) string {
-	var blocks []struct {
-		Elements []struct {
-			Elements []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"elements"`
-		} `json:"elements"`
-	}
-	if json.Unmarshal(raw, &blocks) != nil {
-		return ""
-	}
 	var text strings.Builder
-	for _, block := range blocks {
-		for _, section := range block.Elements {
-			for _, element := range section.Elements {
-				if element.Type == "text" {
-					text.WriteString(element.Text)
-				}
+	appendRichText(&text, raw)
+	return text.String()
+}
+
+func appendRichText(text *strings.Builder, raw json.RawMessage) {
+	if len(raw) == 0 {
+		return
+	}
+	var nodes []richTextNode
+	if json.Unmarshal(raw, &nodes) != nil {
+		return
+	}
+	for _, node := range nodes {
+		switch node.Type {
+		case "text":
+			text.WriteString(node.Text)
+		case "link":
+			if node.Text != "" {
+				text.WriteString(node.Text)
+			} else {
+				text.WriteString(node.URL)
 			}
 		}
+		appendRichText(text, node.Elements)
 	}
-	return text.String()
 }
 
 func marshalDraftRows(rows []DraftRow) (*mcp.CallToolResult, error) {
