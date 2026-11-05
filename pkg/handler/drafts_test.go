@@ -209,6 +209,12 @@ func TestUnitDraftsCreateHandler(t *testing.T) {
 			args:        map[string]any{"channel_id": "C1", "text": "x", "date_scheduled": "1800000000"},
 			errContains: "SLACK_MCP_ADD_MESSAGE_TOOL",
 		},
+		{
+			name:        "scheduling when add-message is the literal channel yes",
+			env:         map[string]string{"SLACK_MCP_DRAFTS_TOOL": "true", "SLACK_MCP_ADD_MESSAGE_TOOL": "yes"},
+			args:        map[string]any{"channel_id": "C1", "text": "x", "date_scheduled": "1800000000"},
+			errContains: "SLACK_MCP_ADD_MESSAGE_TOOL",
+		},
 	}
 	for _, tc := range rejected {
 		t.Run("rejects: "+tc.name, func(t *testing.T) {
@@ -246,6 +252,30 @@ func TestUnitDraftsCreateHandler(t *testing.T) {
 		assert.Equal(t, "1800000000", api.createCalls[0].DateScheduled)
 	})
 
+	t.Run("scheduling allowed when add-message is enabled for every channel", func(t *testing.T) {
+		clearDraftsEnv(t)
+		t.Setenv("SLACK_MCP_DRAFTS_TOOL", "true")
+		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
+		api := &fakeDraftsAPI{}
+		args := baseArgs()
+		args["date_scheduled"] = "1800000000"
+		_, err := newTestDraftsHandler(api).DraftsCreateHandler(context.Background(), draftsRequest(args))
+		require.NoError(t, err)
+		assert.Len(t, api.createCalls, 1)
+	})
+
+	t.Run("scheduling allowed when add-message is listed in enabled tools", func(t *testing.T) {
+		clearDraftsEnv(t)
+		t.Setenv("SLACK_MCP_DRAFTS_TOOL", "true")
+		t.Setenv("SLACK_MCP_ENABLED_TOOLS", "conversations_add_message")
+		api := &fakeDraftsAPI{}
+		args := baseArgs()
+		args["date_scheduled"] = "1800000000"
+		_, err := newTestDraftsHandler(api).DraftsCreateHandler(context.Background(), draftsRequest(args))
+		require.NoError(t, err)
+		assert.Len(t, api.createCalls, 1)
+	})
+
 	t.Run("slack error is surfaced", func(t *testing.T) {
 		clearDraftsEnv(t)
 		t.Setenv("SLACK_MCP_DRAFTS_TOOL", "true")
@@ -277,6 +307,7 @@ func TestUnitDraftsUpdateHandler(t *testing.T) {
 			input:     edge.DraftInput{ChannelID: "C1", Text: "edited", FileIDs: []string{"F1"}},
 		}, api.updateCalls[0])
 		assert.Contains(t, resultText(t, result), "Dr1,C1,#general")
+		assert.Equal(t, draftLookupLimit, api.listLimit)
 	})
 
 	for _, missing := range []string{"draft_id", "client_last_updated_ts", "channel_id", "text"} {
@@ -370,6 +401,7 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 		name          string
 		env           map[string]string
 		args          map[string]any
+		listResponse  *edge.DraftsListResponse
 		errContains   string
 		wantListCalls int
 		wantDelete    []fakeDraftDelete
@@ -423,6 +455,17 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 			wantListCalls: 1,
 		},
 		{
+			name: "lookup stops when slack reports another page",
+			env:  map[string]string{"SLACK_MCP_DRAFTS_TOOL": "true"},
+			args: map[string]any{"draft_id": "missing"},
+			listResponse: &edge.DraftsListResponse{
+				HasMore: true,
+				Drafts:  []edge.Draft{{ID: "Dr1", LastUpdatedTs: "1700000000.1234567", Destinations: []edge.DraftDestination{{ChannelID: "C1"}}}},
+			},
+			errContains:   "draft_list_truncated",
+			wantListCalls: 1,
+		},
+		{
 			name:        "disabled by default",
 			env:         map[string]string{},
 			args:        map[string]any{"draft_id": "Dr1"},
@@ -441,7 +484,11 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 			for key, value := range tc.env {
 				t.Setenv(key, value)
 			}
-			api := &fakeDraftsAPI{listResponse: listed}
+			response := listed
+			if tc.listResponse != nil {
+				response = *tc.listResponse
+			}
+			api := &fakeDraftsAPI{listResponse: response}
 			result, err := newTestDraftsHandler(api).DraftsDeleteHandler(context.Background(), draftsRequest(tc.args))
 			if tc.errContains != "" {
 				assert.ErrorContains(t, err, tc.errContains)
@@ -450,6 +497,9 @@ func TestUnitDraftsDeleteHandler(t *testing.T) {
 				assert.Equal(t, "draft deleted", resultText(t, result))
 			}
 			assert.Equal(t, tc.wantListCalls, api.listCalls)
+			if tc.wantListCalls > 0 {
+				assert.Equal(t, draftLookupLimit, api.listLimit)
+			}
 			assert.Equal(t, tc.wantDelete, api.deleteCalls)
 		})
 	}

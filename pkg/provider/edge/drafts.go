@@ -56,7 +56,8 @@ type Draft struct {
 
 type DraftsListResponse struct {
 	baseResponse
-	Drafts []Draft `json:"drafts"`
+	Drafts  []Draft `json:"drafts"`
+	HasMore bool    `json:"has_more"`
 }
 type draftMutationResponse struct {
 	baseResponse

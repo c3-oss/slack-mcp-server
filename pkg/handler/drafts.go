@@ -24,6 +24,10 @@ const (
 	draftsUpdateTool      = "drafts_update"
 	draftsDeleteTool      = "drafts_delete"
 	addMessageToolForGate = "conversations_add_message"
+
+	// draftLookupLimit is the page size for update/delete lookups.
+	// A zero limit is omitted on the wire, so Slack's default page would hide later drafts.
+	draftLookupLimit = 1000
 )
 
 // DraftRow is the CSV representation returned by the draft tools.
@@ -215,7 +219,7 @@ func (h *DraftsHandler) DraftsDeleteHandler(ctx context.Context, request mcp.Cal
 }
 
 func (h *DraftsHandler) findDraft(ctx context.Context, draftID string) (edge.Draft, error) {
-	response, err := h.slack().DraftsList(ctx, nil, 0)
+	response, err := h.slack().DraftsList(ctx, nil, draftLookupLimit)
 	if err != nil {
 		h.logger.Error("DraftsList failed", zap.Error(err))
 		return edge.Draft{}, fmt.Errorf("failed to look up draft: %w", err)
@@ -224,6 +228,9 @@ func (h *DraftsHandler) findDraft(ctx context.Context, draftID string) (edge.Dra
 		if draft.ID == draftID && draft.LastUpdatedTs != "" {
 			return draft, nil
 		}
+	}
+	if response.HasMore {
+		return edge.Draft{}, errors.New("draft_list_truncated")
 	}
 	return edge.Draft{}, errors.New("draft_not_found")
 }
@@ -358,7 +365,7 @@ func writeToolPolicy(toolName, envVar string) (string, error) {
 // is allowed by the add-message policy.
 func checkSchedulingAllowed(channelID string) error {
 	policy, err := writeToolPolicy(addMessageToolForGate, addMessageToolEnv)
-	if err == nil && (policyAllowsAll(policy) || isChannelAllowedForConfig(channelID, policy)) {
+	if err == nil && isChannelAllowedForConfig(channelID, policy) {
 		return nil
 	}
 	return fmt.Errorf("scheduled drafts are sent by Slack at the scheduled time, so channel %q must also be allowed by %s", channelID, addMessageToolEnv)
