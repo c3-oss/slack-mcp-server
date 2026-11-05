@@ -16,10 +16,20 @@ This feature-rich Slack MCP Server has:
 - **Search Messages**: Search messages in channels, threads, and DMs using various filters like date, user, and content.
 - **Safe Message Posting**: The `conversations_add_message` tool is disabled by default for safety. Enable it via an environment variable, with optional channel restrictions.
 - **Native Message Forwarding**: The `conversations_forward_message` tool uses Slack's native embedded quote card without exposing the source permalink in message text. It requires browser session (`xoxc`/`xoxd`) authentication and is disabled by default.
+- **Draft Messages**: The `drafts_list`, `drafts_create`, `drafts_update`, and `drafts_delete` tools manage Slack drafts. They require browser session (`xoxc`/`xoxd`) authentication, and the write tools are disabled by default.
 - **DM and Group DM support**: Retrieve direct messages and group direct messages.
 - **Embedded user information**: Embed user information in messages, for better context.
 - **Cache support**: Cache users and channels for faster access.
 - **Stdio/SSE/HTTP Transports & Proxy Support**: Use the server with any MCP client that supports Stdio, SSE or HTTP transports, and configure it to route outgoing requests through a proxy if needed.
+
+## This repository continues from [korotovsky/slack-mcp-server v1.3.0](https://github.com/korotovsky/slack-mcp-server/releases/tag/v1.3.0)
+
+Releases after that tag are published by c3-oss. The Go module is `github.com/c3-oss/slack-mcp-server`, the npm package is `@c3-oss/slack-mcp-server`, and the container image is `ghcr.io/c3-oss/slack-mcp-server`. GoReleaser publishes GitHub releases with an SPDX SBOM, and npm packages use trusted publishing via OIDC. This distribution does not publish the DXT package.
+
+- **v1.4.0:** `conversations_add_message` uploads files when `SLACK_MCP_FILES_UPLOAD_TOOL` is enabled. Every uploaded file must be inside a directory listed in `SLACK_MCP_FILES_UPLOAD_PATHS`.
+- **v1.4.1:** Go modules are current, including patches for transitive CVEs.
+- **v1.5.0:** `conversations_forward_message` forwards a message through Slack `chat.shareMessage`. It requires `xoxc`/`xoxd` authentication and stays off unless `SLACK_MCP_FORWARD_MESSAGE_TOOL` allows the destination.
+- **v1.6.0:** `drafts_list`, `drafts_create`, `drafts_update`, and `drafts_delete` require `xoxc`/`xoxd` authentication. Write tools stay off unless `SLACK_MCP_DRAFTS_TOOL` allows the channel. A `date_scheduled` draft is sent by Slack, and that destination must also be allowed by the same rule as `conversations_add_message` (`SLACK_MCP_ADD_MESSAGE_TOOL`).
 
 ### Analytics Demo
 
@@ -364,7 +374,7 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_CHANNELS_CACHE`        | No        | `~/Library/Caches/slack-mcp-server/channels_cache_v2.json` (macOS)<br>`~/.cache/slack-mcp-server/channels_cache_v2.json` (Linux)<br>`%LocalAppData%/slack-mcp-server/channels_cache_v2.json` (Windows) | Path to the channels cache file. Used to cache Slack channel information to avoid repeated API calls on startup. |
 | `SLACK_MCP_LOG_LEVEL`             | No        | `info`                    | Log-level for stdout or stderr. Valid values are: `debug`, `info`, `warn`, `error`, `panic` and `fatal`                                                                                                                                                                                   |
 | `SLACK_MCP_GOVSLACK`              | No        | `nil`                     | Set to `true` to enable [GovSlack](https://slack.com/solutions/govslack) mode. Routes API calls to `slack-gov.com` endpoints instead of `slack.com` for FedRAMP-compliant government workspaces.                                                                                          |
-| `SLACK_MCP_ENABLED_TOOLS`         | No        | `nil`                     | Comma-separated list of tools to register. If empty, all read-only tools and usergroups tools are registered; write tools (`conversations_add_message`, `conversations_forward_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`) require their specific env var OR must be explicitly listed here. When a write tool is listed here, it's enabled without channel restrictions. Available tools include `conversations_history`, `conversations_replies`, `conversations_add_message`, `conversations_forward_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`, `conversations_search_messages`, `channels_list`, `usergroups_list`, `usergroups_me`, `usergroups_create`, `usergroups_update`, `usergroups_users_update`. |
+| `SLACK_MCP_ENABLED_TOOLS`         | No        | `nil`                     | Comma-separated list of tools to register. If empty, all read-only tools and usergroups tools are registered; write tools (`conversations_add_message`, `conversations_forward_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`, `drafts_create`, `drafts_update`, `drafts_delete`) require their specific env var OR must be explicitly listed here. When a write tool is listed here, it's enabled without channel restrictions. Available tools: `conversations_history`, `conversations_replies`, `conversations_add_message`, `conversations_forward_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`, `conversations_search_messages`, `conversations_unreads`, `conversations_mark`, `conversations_leave`, `conversations_join`, `channels_list`, `channels_me`, `usergroups_list`, `usergroups_me`, `usergroups_create`, `usergroups_update`, `usergroups_users_update`, `users_search`, `saved_list`, `saved_update`, `saved_clear_completed`, `drafts_list`, `drafts_create`, `drafts_update`, `drafts_delete`. |
 
 *You need one of: `xoxp` (user), `xoxb` (bot), or both `xoxc`/`xoxd` tokens for authentication.
 
