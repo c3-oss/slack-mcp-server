@@ -252,6 +252,53 @@ Clear all completed saved items from the "Save for Later" panel. This is a bulk 
 
 - **Parameters:** None.
 
+### 20. drafts_list
+List the authenticated user's unsent message drafts. Returns CSV with columns `DraftID`, `ChannelID`, `ChannelName`, `ThreadTs`, `Broadcast`, `Text`, `FileIDs`, `LastUpdatedTs`, `DateScheduled`, `DateCreated`, `IsSent`. Use `DraftID` and `LastUpdatedTs` for `drafts_update` and `drafts_delete`.
+
+> **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens.
+
+- **Parameters:**
+  - `is_active` (boolean, optional): Only return active (unsent) drafts.
+  - `limit` (number, optional): Maximum number of drafts to return.
+
+### 21. drafts_create
+Create a draft addressed to a channel, DM, or thread. The draft appears in the conversation composer for the user to review and send. Returns the created draft as a CSV row.
+
+> **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens. It is disabled by default; see `SLACK_MCP_DRAFTS_TOOL`.
+
+- **Parameters:**
+  - `channel_id` (string, required): Channel ID (`Cxxxxxxxxxx`, `Dxxxxxxxxxx`) or a name starting with `#` or `@` (e.g., `#general`, `@username`).
+  - `text` (string, required): Draft message text.
+  - `thread_ts` (string, optional): Parent message timestamp, to draft a thread reply.
+  - `broadcast` (boolean, default `false`): Also send the thread reply to the channel when posted. Only used with `thread_ts`.
+  - `file_ids` (string, optional): Comma-separated IDs of already uploaded files to attach.
+  - `date_scheduled` (string, optional): Unix timestamp in seconds. **Slack sends the draft automatically at this time**, so the channel must also be allowed by `SLACK_MCP_ADD_MESSAGE_TOOL` (or `conversations_add_message` must be explicitly enabled).
+
+### 22. drafts_update
+Replace the text and destination of an existing draft. Returns the updated draft as a CSV row. The draft is looked up first: every current destination must be allowed by `SLACK_MCP_DRAFTS_TOOL`, and an already scheduled draft can only target a channel allowed by `SLACK_MCP_ADD_MESSAGE_TOOL`.
+
+> **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens. It is disabled by default; see `SLACK_MCP_DRAFTS_TOOL`.
+
+- **Parameters:**
+  - `draft_id` (string, required): `DraftID` from `drafts_list` output.
+  - `client_last_updated_ts` (string, required): `LastUpdatedTs` from `drafts_list` output. Padding to Slack's 7-decimal precision is automatic.
+  - `channel_id` (string, required): Destination channel ID or `#name`/`@username`.
+  - `text` (string, required): New draft text.
+  - `thread_ts` (string, optional): Parent message timestamp, to make it a thread reply.
+  - `broadcast` (boolean, default `false`): Also send the thread reply to the channel when posted. Only used with `thread_ts`.
+  - `file_ids` (string, optional): Comma-separated IDs of already uploaded files to attach.
+
+### 23. drafts_delete
+Delete a draft. With an allow-all `SLACK_MCP_DRAFTS_TOOL` policy and an explicit `client_last_updated_ts`, the draft is deleted directly. Otherwise it is looked up first, and deletion is refused when the draft is not found, its destination is unknown, or any of its destination channels is not allowed.
+
+> **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens. It is disabled by default; see `SLACK_MCP_DRAFTS_TOOL`.
+
+- **Parameters:**
+  - `draft_id` (string, required): `DraftID` from `drafts_list` output.
+  - `client_last_updated_ts` (string, optional): `LastUpdatedTs` from `drafts_list` output. Looked up automatically when omitted.
+
+Draft write tools (`drafts_create`, `drafts_update`, `drafts_delete`) are controlled by `SLACK_MCP_DRAFTS_TOOL`: `true`, `1`, or `yes` enables all channels; a comma-separated list of channel IDs is an allowlist; `!`-prefixed IDs form a denylist. When it is empty, a write tool is only available if listed by exact name in `SLACK_MCP_ENABLED_TOOLS`. Slack keeps one active draft per conversation, so creating a draft replaces any existing draft in the same conversation.
+
 ## Resources
 
 The Slack MCP Server exposes two special directory resources for easy access to workspace metadata:
@@ -303,6 +350,7 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_SERVER_CA`             | No        | `nil`                     | Path to CA certificate                                                                                                                                                                                                                                                                    |
 | `SLACK_MCP_SERVER_CA_TOOLKIT`     | No        | `nil`                     | Inject HTTPToolkit CA certificate to root trust-store for MitM debugging                                                                                                                                                                                                                  |
 | `SLACK_MCP_SERVER_CA_INSECURE`    | No        | `false`                   | Trust all insecure requests (NOT RECOMMENDED)                                                                                                                                                                                                                                             |
+| `SLACK_MCP_DRAFTS_TOOL`           | No        | `nil`                     | Enable draft write tools with true/allowlist/!denylist; empty requires explicit enabled-tools listing. Session auth only; scheduled drafts also require `SLACK_MCP_ADD_MESSAGE_TOOL`. |
 | `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `conversations_add_message` by setting it to `true` for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. If empty, the tool is only registered when explicitly listed in `SLACK_MCP_ENABLED_TOOLS`. |
 | `SLACK_MCP_FORWARD_MESSAGE_TOOL`  | No        | `nil`                     | Enable native forwarding via `conversations_forward_message` for `xoxc`/`xoxd` sessions. Set to `true` for all destination channels, a comma-separated destination-channel allowlist, or a `!`-prefixed denylist. If empty, the tool is only registered when explicitly listed in `SLACK_MCP_ENABLED_TOOLS`. |
 | `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When `conversations_add_message` is enabled (via `SLACK_MCP_ADD_MESSAGE_TOOL` or `SLACK_MCP_ENABLED_TOOLS`), setting this to `true` will automatically mark sent messages as read.                                                                                                        |
