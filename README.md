@@ -234,18 +234,18 @@ Mark a channel or DM as read.
   - `ts` (string, optional): Timestamp of the message to mark as read up to. If not provided, marks all messages as read.
 
 ### 17. saved_list
-List saved items from Slack's "Save for Later" panel. Returns items the user has saved, with optional message content. This replaces the deprecated `stars.list` API ([changelog](https://api.slack.com/changelog/2023-07-its-later-already-for-stars-and-reminders)).
+List the authenticated user's Saved items and To-dos. Saved items have no due date. To-dos have a due date. Each row includes the item metadata and, by default, the saved message text. Reminder items include their description. An empty view returns the list counts (`saved_no_due_date_count`, `todo_count`, and the other totals).
 
 > **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens.
 
 - **Parameters:**
-  - `filter` (string, default `"saved"`): Filter saved items: `"saved"` (active/in-progress), `"completed"` (marked done), `"archived"`.
-  - `limit` (number, default `50`): Maximum number of items to return. Auto-paginates.
-  - `include_messages` (boolean, default `true`): If true, fetches the actual saved message content. If false, returns metadata only.
-  - `max_messages_per_item` (number, default `5`): Max messages to fetch per saved item (for thread replies).
+  - `filter` (string, default `"all"`): View to list: `"all"` (Saved and To-dos), `"saved"` (Saved), `"to_do"` (To-dos), `"completed"`, `"archived"`.
+  - `limit` (number, default `50`): Maximum number of items to return. Auto-paginates. `all` includes Saved and To-dos, and keeps items from both tabs when the two lists are longer than `limit`.
+  - `include_messages` (boolean, default `true`): When true, fetches the saved message text. Reminder text is included either way.
+  - `max_messages_per_item` (number, default `5`): Max messages read when the saved item is a thread reply.
 
 ### 18. saved_update
-Update a saved item: mark as completed, set a due date/reminder, or both. Use `item_id` and `ts` values from `saved_list` output. This replaces the deprecated `stars.add`/`stars.remove` APIs.
+Update a Saved item or To-do: mark it completed, set a due date, or both. A due date places the item in To-dos. Clearing the due date places it in Saved. Use `item_id` and `ts` values from `saved_list` output.
 
 > **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens.
 
@@ -256,7 +256,7 @@ Update a saved item: mark as completed, set a due date/reminder, or both. Use `i
   - `date_due` (number, optional): Unix timestamp for due date/reminder. Set to `0` to clear.
 
 ### 19. saved_clear_completed
-Clear all completed saved items from the "Save for Later" panel. This is a bulk operation that removes all items with `state="completed"`.
+Clear every completed To-do. This removes all items with `state="completed"`.
 
 > **Note:** This tool requires browser session tokens (`xoxc`/`xoxd`). It is not available with standard OAuth (`xoxp`) or bot (`xoxb`) tokens.
 
